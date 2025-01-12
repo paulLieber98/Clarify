@@ -2,6 +2,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const chatContainer = document.getElementById('chatContainer');
     const messageInput = document.getElementById('messageInput');
     const sendButton = document.getElementById('sendButton');
+    const typingIndicator = document.getElementById('typingIndicator');
 
     // You'll need to replace this with your actual OpenAI API key
     const OPENAI_API_KEY = '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';
@@ -11,17 +12,53 @@ document.addEventListener('DOMContentLoaded', function() {
         return tab;
     }
 
+    function showTypingIndicator() {
+        typingIndicator.style.display = 'block';
+        chatContainer.scrollTop = chatContainer.scrollHeight;
+    }
+
+    function hideTypingIndicator() {
+        typingIndicator.style.display = 'none';
+    }
+
     function addMessage(content, isUser = false) {
         const messageDiv = document.createElement('div');
         messageDiv.className = `message ${isUser ? 'user' : ''}`;
         
         const messageContent = document.createElement('div');
         messageContent.className = 'message-content';
-        messageContent.textContent = content;
+        
+        // Add text content word by word for non-user messages
+        if (!isUser) {
+            messageContent.textContent = content;
+        } else {
+            messageContent.textContent = content;
+        }
         
         messageDiv.appendChild(messageContent);
-        chatContainer.appendChild(messageDiv);
+        chatContainer.insertBefore(messageDiv, typingIndicator);
         chatContainer.scrollTop = chatContainer.scrollHeight;
+    }
+
+    async function typeMessage(message) {
+        const messageDiv = document.createElement('div');
+        messageDiv.className = 'message';
+        
+        const messageContent = document.createElement('div');
+        messageContent.className = 'message-content';
+        messageDiv.appendChild(messageContent);
+        
+        chatContainer.insertBefore(messageDiv, typingIndicator);
+        
+        const words = message.split(' ');
+        let currentText = '';
+        
+        for (let word of words) {
+            currentText += (currentText ? ' ' : '') + word;
+            messageContent.textContent = currentText;
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+            await new Promise(resolve => setTimeout(resolve, 50)); // Adjust speed as needed
+        }
     }
 
     async function getPageContent() {
@@ -89,11 +126,14 @@ document.addEventListener('DOMContentLoaded', function() {
         const userMessage = messageInput.value.trim();
         if (!userMessage) return;
 
-        // Clear input
+        // Disable input and show sending state
         messageInput.value = '';
+        messageInput.disabled = true;
+        sendButton.disabled = true;
 
-        // Add user message to chat
+        // Add user message
         addMessage(userMessage, true);
+        showTypingIndicator();
 
         // Get page content
         const pageContent = await getPageContent();
@@ -112,7 +152,15 @@ document.addEventListener('DOMContentLoaded', function() {
 
         // Get AI response
         const aiResponse = await sendToChatGPT(messages);
-        addMessage(aiResponse);
+        hideTypingIndicator();
+        
+        // Type out the AI response
+        await typeMessage(aiResponse);
+
+        // Re-enable input
+        messageInput.disabled = false;
+        sendButton.disabled = false;
+        messageInput.focus();
 
         // Check if we need to scroll to content
         if (userMessage.toLowerCase().includes('take me to') || 
@@ -130,11 +178,14 @@ document.addEventListener('DOMContentLoaded', function() {
     // Event listeners
     sendButton.addEventListener('click', handleMessage);
     messageInput.addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
             handleMessage();
         }
     });
 
-    // Initial greeting
-    addMessage('Hello! I can help you understand this page better. Ask me to summarize the content or find specific information.');
+    // Initial greeting with typing animation
+    setTimeout(() => {
+        typeMessage('Hello! I can help you understand this page better. Ask me to summarize the content or find specific information.');
+    }, 500);
 }); 
