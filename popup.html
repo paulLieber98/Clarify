@@ -219,6 +219,63 @@
             word-wrap: break-word;
         }
 
+        .message-content strong {
+            font-weight: 600;
+        }
+
+        .message-content em {
+            font-style: italic;
+        }
+
+        .message-content code {
+            font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
+            background: rgba(0, 0, 0, 0.05);
+            padding: 2px 4px;
+            border-radius: 4px;
+            font-size: 0.9em;
+        }
+
+        .message-content pre {
+            margin: 8px 0;
+            background: rgba(0, 0, 0, 0.05);
+            padding: 8px;
+            border-radius: 8px;
+            overflow-x: auto;
+        }
+
+        .message-content pre code {
+            background: none;
+            padding: 0;
+            border-radius: 0;
+        }
+
+        .message-content li {
+            margin-left: 20px;
+            margin-bottom: 4px;
+        }
+
+        .message-content a {
+            color: #3b82f6;
+            text-decoration: none;
+        }
+
+        .message-content a:hover {
+            text-decoration: underline;
+        }
+
+        .message.user .message-content code {
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        .message.user .message-content pre {
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        .message.user .message-content a {
+            color: white;
+            text-decoration: underline;
+        }
+
         .message:not(.user) .message-content {
             background: #ffffff;
             color: #1e293b;

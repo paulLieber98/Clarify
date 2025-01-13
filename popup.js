@@ -203,6 +203,22 @@ document.addEventListener('DOMContentLoaded', function() {
         typingIndicator.style.display = 'none';
     }
 
+    function parseMarkdown(text) {
+        return text
+            // Bold
+            .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+            // Italic
+            .replace(/\*(.*?)\*/g, '<em>$1</em>')
+            // Code blocks
+            .replace(/```([\s\S]*?)```/g, '<pre><code>$1</code></pre>')
+            // Inline code
+            .replace(/`([^`]+)`/g, '<code>$1</code>')
+            // Lists
+            .replace(/^\s*[-*]\s+(.+)$/gm, '<li>$1</li>')
+            // Links
+            .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
+    }
+
     function addMessage(content, isUser = false) {
         const messageDiv = document.createElement('div');
         messageDiv.className = `message ${isUser ? 'user' : ''}`;
@@ -210,9 +226,8 @@ document.addEventListener('DOMContentLoaded', function() {
         const messageContent = document.createElement('div');
         messageContent.className = 'message-content';
         
-        // Add text content word by word for non-user messages
         if (!isUser) {
-            messageContent.textContent = content;
+            messageContent.innerHTML = parseMarkdown(content);
         } else {
             messageContent.textContent = content;
         }
@@ -237,9 +252,9 @@ document.addEventListener('DOMContentLoaded', function() {
         
         for (let word of words) {
             currentText += (currentText ? ' ' : '') + word;
-            messageContent.textContent = currentText;
+            messageContent.innerHTML = parseMarkdown(currentText);
             chatContainer.scrollTop = chatContainer.scrollHeight;
-            await new Promise(resolve => setTimeout(resolve, 50)); // Adjust speed as needed
+            await new Promise(resolve => setTimeout(resolve, 50));
         }
     }
 
