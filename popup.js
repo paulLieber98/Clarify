@@ -37,18 +37,57 @@ document.addEventListener('DOMContentLoaded', function() {
             const historyItem = document.createElement('div');
             historyItem.className = 'history-item';
             
+            const itemContent = document.createElement('div');
+            itemContent.className = 'history-item-content';
+            
             // Get the last message for preview
             const lastMessage = chat.messages[chat.messages.length - 1];
             const preview = lastMessage ? lastMessage.content.substring(0, 50) + '...' : 'Empty chat';
             
-            historyItem.innerHTML = `
+            itemContent.innerHTML = `
                 <div class="history-item-time">${new Date(chat.timestamp).toLocaleString()}</div>
                 <div class="history-item-preview">${preview}</div>
             `;
             
-            historyItem.addEventListener('click', () => loadChat(chatId));
+            const deleteButton = document.createElement('button');
+            deleteButton.className = 'delete-chat';
+            deleteButton.innerHTML = `
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M6 18L18 6M6 6l12 12"></path>
+                </svg>
+            `;
+            
+            // Add click event for the content area
+            itemContent.addEventListener('click', () => loadChat(chatId));
+            
+            // Add click event for delete button
+            deleteButton.addEventListener('click', async (e) => {
+                e.stopPropagation(); // Prevent triggering the parent's click event
+                await deleteChat(chatId);
+            });
+            
+            historyItem.appendChild(itemContent);
+            historyItem.appendChild(deleteButton);
             historyItems.appendChild(historyItem);
         }
+    }
+
+    // Delete a specific chat
+    async function deleteChat(chatId) {
+        const storage = await chrome.storage.local.get('chats');
+        const chats = storage.chats || {};
+        
+        // If we're deleting the current chat, start a new one
+        if (chatId === currentChatId) {
+            startNewChat();
+        }
+        
+        // Delete the chat and update storage
+        delete chats[chatId];
+        await chrome.storage.local.set({ chats });
+        
+        // Refresh the history display
+        loadChatHistory();
     }
 
     // Load a specific chat
