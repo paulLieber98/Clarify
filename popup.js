@@ -319,7 +319,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const messages = [
             {
                 role: 'system',
-                content: 'You are a helpful assistant that helps users understand web pages and navigate to specific content. If the user asks to find something, respond with the exact text to search for after your explanation.'
+                content: 'You are a very helpful and intelligent assistant that helps users understand web pages and navigate to specific content. Your name is Clarify. If the user asks to find something, respond with the exact text to search for after your explanation. Please scroll to the specific text that the user asks for--if they do ask to find some specific information. '
             },
             {
                 role: 'user',
