@@ -112,18 +112,35 @@
             color: #0f172a;
         }
 
-        .clear-history {
+        .history-menu-actions {
+            display: flex;
+            gap: 8px;
+        }
+
+        .clear-history, .new-chat {
             background: none;
             border: none;
-            color: #ef4444;
             font-size: 12px;
             cursor: pointer;
             padding: 4px 8px;
             border-radius: 4px;
+            transition: all 0.2s ease;
+        }
+
+        .clear-history {
+            color: #ef4444;
         }
 
         .clear-history:hover {
             background: #fef2f2;
+        }
+
+        .new-chat {
+            color: #3b82f6;
+        }
+
+        .new-chat:hover {
+            background: #eff6ff;
         }
 
         .history-items {
@@ -330,7 +347,10 @@
         <div class="history-menu" id="historyMenu">
             <div class="history-menu-header">
                 <h2>Chat History</h2>
-                <button class="clear-history" id="clearHistory">Clear All</button>
+                <div class="history-menu-actions">
+                    <button class="new-chat" id="newChat">New Chat</button>
+                    <button class="clear-history" id="clearHistory">Clear All</button>
+                </div>
             </div>
             <div class="history-items" id="historyItems">
                 <div class="empty-history">No chat history yet</div>

@@ -7,6 +7,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const historyMenu = document.getElementById('historyMenu');
     const historyItems = document.getElementById('historyItems');
     const clearHistoryButton = document.getElementById('clearHistory');
+    const newChatButton = document.getElementById('newChat');
 
     let currentChatId = generateChatId();
     let isHistoryMenuOpen = false;
@@ -114,9 +115,28 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
+    // Start a new chat
+    async function startNewChat() {
+        // Clear current chat
+        chatContainer.innerHTML = '';
+        chatContainer.appendChild(typingIndicator);
+        
+        // Generate new chat ID
+        currentChatId = generateChatId();
+        
+        // Add initial greeting
+        setTimeout(() => {
+            typeMessage('Hello! I can help you understand this page better. Ask me to summarize the content or find specific information.');
+        }, 500);
+        
+        // Close history menu
+        toggleHistoryMenu();
+    }
+
     // Event listeners for history
     historyButton.addEventListener('click', toggleHistoryMenu);
     clearHistoryButton.addEventListener('click', clearHistory);
+    newChatButton.addEventListener('click', startNewChat);
 
     // Close history menu when clicking outside
     document.addEventListener('click', (e) => {
