@@ -360,14 +360,36 @@ document.addEventListener('DOMContentLoaded', function() {
         messageInput.focus();
     }
 
+    // Auto-resize textarea
+    function autoResizeTextarea() {
+        messageInput.style.height = 'auto';
+        messageInput.style.height = Math.min(messageInput.scrollHeight, 120) + 'px';
+    }
+
     // Event listeners
-    sendButton.addEventListener('click', handleMessage);
-    messageInput.addEventListener('keypress', (e) => {
-        if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault();
-            handleMessage();
+    messageInput.addEventListener('input', autoResizeTextarea);
+    
+    messageInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            if (e.shiftKey) {
+                // Allow new line with Shift+Enter
+                return;
+            } else {
+                // Send message with just Enter
+                e.preventDefault();
+                handleMessage();
+            }
         }
     });
+
+    sendButton.addEventListener('click', handleMessage);
+
+    // Reset textarea height when clearing input
+    const originalHandleMessage = handleMessage;
+    handleMessage = async function() {
+        await originalHandleMessage.call(this);
+        messageInput.style.height = '40px'; // Reset to minimum height after sending
+    };
 
     // Initial greeting with typing animation
     setTimeout(() => {
