@@ -3,6 +3,129 @@ document.addEventListener('DOMContentLoaded', function() {
     const messageInput = document.getElementById('messageInput');
     const sendButton = document.getElementById('sendButton');
     const typingIndicator = document.getElementById('typingIndicator');
+    const historyButton = document.getElementById('historyButton');
+    const historyMenu = document.getElementById('historyMenu');
+    const historyItems = document.getElementById('historyItems');
+    const clearHistoryButton = document.getElementById('clearHistory');
+
+    let currentChatId = generateChatId();
+    let isHistoryMenuOpen = false;
+
+    // Generate a unique ID for each chat session
+    function generateChatId() {
+        return Date.now().toString(36) + Math.random().toString(36).substr(2);
+    }
+
+    // Load and display chat history
+    async function loadChatHistory() {
+        const storage = await chrome.storage.local.get('chats');
+        const chats = storage.chats || {};
+        
+        historyItems.innerHTML = '';
+        
+        if (Object.keys(chats).length === 0) {
+            historyItems.innerHTML = '<div class="empty-history">No chat history yet</div>';
+            return;
+        }
+
+        // Sort chats by timestamp (newest first)
+        const sortedChats = Object.entries(chats)
+            .sort(([,a], [,b]) => b.timestamp - a.timestamp);
+
+        for (const [chatId, chat] of sortedChats) {
+            const historyItem = document.createElement('div');
+            historyItem.className = 'history-item';
+            
+            // Get the last message for preview
+            const lastMessage = chat.messages[chat.messages.length - 1];
+            const preview = lastMessage ? lastMessage.content.substring(0, 50) + '...' : 'Empty chat';
+            
+            historyItem.innerHTML = `
+                <div class="history-item-time">${new Date(chat.timestamp).toLocaleString()}</div>
+                <div class="history-item-preview">${preview}</div>
+            `;
+            
+            historyItem.addEventListener('click', () => loadChat(chatId));
+            historyItems.appendChild(historyItem);
+        }
+    }
+
+    // Load a specific chat
+    async function loadChat(chatId) {
+        const storage = await chrome.storage.local.get('chats');
+        const chats = storage.chats || {};
+        const chat = chats[chatId];
+        
+        if (chat) {
+            // Clear current chat
+            chatContainer.innerHTML = '';
+            chatContainer.appendChild(typingIndicator);
+            
+            // Load messages
+            for (const message of chat.messages) {
+                addMessage(message.content, message.isUser);
+            }
+            
+            currentChatId = chatId;
+            
+            // Close history menu
+            toggleHistoryMenu();
+        }
+    }
+
+    // Save current chat
+    async function saveChat(messages) {
+        const storage = await chrome.storage.local.get('chats');
+        const chats = storage.chats || {};
+        const tab = await getCurrentTab();
+        
+        chats[currentChatId] = {
+            url: tab.url,
+            messages: messages,
+            timestamp: Date.now()
+        };
+        
+        await chrome.storage.local.set({ chats });
+        loadChatHistory();
+    }
+
+    // Clear all chat history
+    async function clearHistory() {
+        await chrome.storage.local.set({ chats: {} });
+        loadChatHistory();
+        
+        // Reset current chat
+        chatContainer.innerHTML = '';
+        chatContainer.appendChild(typingIndicator);
+        currentChatId = generateChatId();
+        
+        // Add initial greeting
+        setTimeout(() => {
+            typeMessage('Hello! I can help you understand this page better. Ask me to summarize the content or find specific information.');
+        }, 500);
+    }
+
+    // Toggle history menu
+    function toggleHistoryMenu() {
+        isHistoryMenuOpen = !isHistoryMenuOpen;
+        historyMenu.classList.toggle('show');
+        if (isHistoryMenuOpen) {
+            loadChatHistory();
+        }
+    }
+
+    // Event listeners for history
+    historyButton.addEventListener('click', toggleHistoryMenu);
+    clearHistoryButton.addEventListener('click', clearHistory);
+
+    // Close history menu when clicking outside
+    document.addEventListener('click', (e) => {
+        if (isHistoryMenuOpen && 
+            !historyMenu.contains(e.target) && 
+            !historyButton.contains(e.target)) {
+            toggleHistoryMenu();
+        }
+    });
 
     // You'll need to replace this with your actual OpenAI API key
     const OPENAI_API_KEY = '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';
@@ -108,7 +231,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     'Authorization': `Bearer ${OPENAI_API_KEY}`
                 },
                 body: JSON.stringify({
-                    model: 'gpt-3.5-turbo',
+                    model: 'gpt-4o-mini-2024-07-18',
                     messages: messages,
                     max_tokens: 500
                 })
@@ -126,19 +249,14 @@ document.addEventListener('DOMContentLoaded', function() {
         const userMessage = messageInput.value.trim();
         if (!userMessage) return;
 
-        // Disable input and show sending state
         messageInput.value = '';
         messageInput.disabled = true;
         sendButton.disabled = true;
 
-        // Add user message
         addMessage(userMessage, true);
         showTypingIndicator();
 
-        // Get page content
         const pageContent = await getPageContent();
-
-        // Prepare messages for ChatGPT
         const messages = [
             {
                 role: 'system',
@@ -150,29 +268,37 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         ];
 
-        // Get AI response
         const aiResponse = await sendToChatGPT(messages);
         hideTypingIndicator();
         
-        // Type out the AI response
-        await typeMessage(aiResponse);
+        if (aiResponse && aiResponse.trim()) {
+            await typeMessage(aiResponse);
 
-        // Re-enable input
+            // Save chat history
+            const storage = await chrome.storage.local.get('chats');
+            const chats = storage.chats || {};
+            const currentChat = chats[currentChatId] || { messages: [] };
+            
+            currentChat.messages.push(
+                { content: userMessage, isUser: true },
+                { content: aiResponse, isUser: false }
+            );
+            
+            await saveChat(currentChat.messages);
+
+            if (aiResponse.includes('NAVIGATE:')) {
+                const match = aiResponse.match(/"([^"]+)"/);
+                if (match) {
+                    setTimeout(() => {
+                        scrollToContent(match[1].trim());
+                    }, 500);
+                }
+            }
+        }
+
         messageInput.disabled = false;
         sendButton.disabled = false;
         messageInput.focus();
-
-        // Check if we need to scroll to content
-        if (userMessage.toLowerCase().includes('take me to') || 
-            userMessage.toLowerCase().includes('find') || 
-            userMessage.toLowerCase().includes('where is')) {
-            // Extract the last quoted text or the last sentence from AI response
-            const match = aiResponse.match(/"([^"]+)"/) || aiResponse.match(/[^.!?]+[.!?]$/);
-            if (match) {
-                const searchText = match[1] || match[0];
-                scrollToContent(searchText.trim());
-            }
-        }
     }
 
     // Event listeners
