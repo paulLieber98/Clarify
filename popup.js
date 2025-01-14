@@ -536,6 +536,10 @@ document.addEventListener('DOMContentLoaded', function() {
     async function handleLogout() {
         if (!currentUser) return;
         
+        // Add confirmation dialog
+        const confirmLogout = confirm('Are you sure you want to log out?');
+        if (!confirmLogout) return;
+        
         await chrome.storage.local.remove('currentUser');
         currentUser = null;
         
