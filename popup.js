@@ -1,4 +1,114 @@
 document.addEventListener('DOMContentLoaded', function() {
+    // Authentication elements
+    const authOverlay = document.getElementById('authOverlay');
+    const authForm = document.getElementById('authForm');
+    const authToggle = document.getElementById('authToggle');
+    const authSubmit = document.getElementById('authSubmit');
+    const emailInput = document.getElementById('emailInput');
+    const passwordInput = document.getElementById('passwordInput');
+    const authError = document.getElementById('authError');
+
+    let isSignIn = true;
+    let currentUser = null;
+
+    // Check if user is already logged in
+    chrome.storage.local.get(['currentUser'], function(result) {
+        if (result.currentUser) {
+            currentUser = result.currentUser;
+            hideAuthOverlay();
+        }
+    });
+
+    // Toggle between sign in and sign up
+    authToggle.addEventListener('click', () => {
+        isSignIn = !isSignIn;
+        authSubmit.textContent = isSignIn ? 'Sign In' : 'Sign Up';
+        authToggle.textContent = isSignIn ? 'Sign Up' : 'Sign In';
+        const switchText = authToggle.previousElementSibling;
+        switchText.textContent = isSignIn ? "Don't have an account? " : 'Already have an account? ';
+        hideAuthError();
+    });
+
+    // Handle form submission
+    authForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const email = emailInput.value.trim();
+        const password = passwordInput.value.trim();
+
+        // Basic validation
+        if (!email || !password) {
+            showAuthError('Please fill in all fields');
+            return;
+        }
+
+        if (password.length < 6) {
+            showAuthError('Password must be at least 6 characters');
+            return;
+        }
+
+        try {
+            if (isSignIn) {
+                // Sign In
+                const users = await getUsers();
+                const user = users[email];
+                
+                if (!user) {
+                    showAuthError('Email not found');
+                    return;
+                }
+
+                if (user.password !== password) {
+                    showAuthError('Incorrect password');
+                    return;
+                }
+
+                currentUser = { email };
+                await chrome.storage.local.set({ currentUser });
+                hideAuthOverlay();
+            } else {
+                // Sign Up
+                const users = await getUsers();
+                
+                if (users[email]) {
+                    showAuthError('Email already exists');
+                    return;
+                }
+
+                users[email] = { password };
+                await chrome.storage.local.set({ users });
+                
+                currentUser = { email };
+                await chrome.storage.local.set({ currentUser });
+                hideAuthOverlay();
+            }
+        } catch (error) {
+            showAuthError('An error occurred. Please try again.');
+        }
+    });
+
+    // Helper functions
+    async function getUsers() {
+        const result = await chrome.storage.local.get(['users']);
+        return result.users || {};
+    }
+
+    function showAuthError(message) {
+        authError.textContent = message;
+        authError.style.display = 'block';
+        emailInput.classList.add('error');
+        passwordInput.classList.add('error');
+    }
+
+    function hideAuthError() {
+        authError.style.display = 'none';
+        emailInput.classList.remove('error');
+        passwordInput.classList.remove('error');
+    }
+
+    function hideAuthOverlay() {
+        authOverlay.style.display = 'none';
+    }
+
     const chatContainer = document.getElementById('chatContainer');
     const messageInput = document.getElementById('messageInput');
     const sendButton = document.getElementById('sendButton');
@@ -19,13 +129,24 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Load and display chat history
     async function loadChatHistory() {
-        const storage = await chrome.storage.local.get('chats');
-        const chats = storage.chats || {};
+        if (!currentUser) return;
+        
+        const userChatsKey = `chats_${currentUser.email}`;
+        const storage = await chrome.storage.local.get(userChatsKey);
+        const chats = storage[userChatsKey] || {};
         
         historyItems.innerHTML = '';
         
         if (Object.keys(chats).length === 0) {
-            historyItems.innerHTML = '<div class="empty-history">No chat history yet</div>';
+            historyItems.innerHTML = `
+                <div class="empty-history">
+                    <div class="empty-history-icon">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#a3a3a3" stroke-width="2">
+                            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+                        </svg>
+                    </div>
+                    No chat history yet
+                </div>`;
             return;
         }
 
@@ -40,7 +161,6 @@ document.addEventListener('DOMContentLoaded', function() {
             const itemContent = document.createElement('div');
             itemContent.className = 'history-item-content';
             
-            // Get the last message for preview
             const lastMessage = chat.messages[chat.messages.length - 1];
             const preview = lastMessage ? lastMessage.content.substring(0, 50) + '...' : 'Empty chat';
             
@@ -57,12 +177,9 @@ document.addEventListener('DOMContentLoaded', function() {
                 </svg>
             `;
             
-            // Add click event for the content area
             itemContent.addEventListener('click', () => loadChat(chatId));
-            
-            // Add click event for delete button
             deleteButton.addEventListener('click', async (e) => {
-                e.stopPropagation(); // Prevent triggering the parent's click event
+                e.stopPropagation();
                 await deleteChat(chatId);
             });
             
@@ -74,49 +191,50 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Delete a specific chat
     async function deleteChat(chatId) {
-        const storage = await chrome.storage.local.get('chats');
-        const chats = storage.chats || {};
+        if (!currentUser) return;
         
-        // If we're deleting the current chat, start a new one
+        const userChatsKey = `chats_${currentUser.email}`;
+        const storage = await chrome.storage.local.get(userChatsKey);
+        const chats = storage[userChatsKey] || {};
+        
         if (chatId === currentChatId) {
             startNewChat();
         }
         
-        // Delete the chat and update storage
         delete chats[chatId];
-        await chrome.storage.local.set({ chats });
-        
-        // Refresh the history display
+        await chrome.storage.local.set({ [userChatsKey]: chats });
         loadChatHistory();
     }
 
     // Load a specific chat
     async function loadChat(chatId) {
-        const storage = await chrome.storage.local.get('chats');
-        const chats = storage.chats || {};
+        if (!currentUser) return;
+        
+        const userChatsKey = `chats_${currentUser.email}`;
+        const storage = await chrome.storage.local.get(userChatsKey);
+        const chats = storage[userChatsKey] || {};
         const chat = chats[chatId];
         
         if (chat) {
-            // Clear current chat
             chatContainer.innerHTML = '';
             chatContainer.appendChild(typingIndicator);
             
-            // Load messages
             for (const message of chat.messages) {
                 addMessage(message.content, message.isUser);
             }
             
             currentChatId = chatId;
-            
-            // Close history menu
             toggleHistoryMenu();
         }
     }
 
     // Save current chat
     async function saveChat(messages) {
-        const storage = await chrome.storage.local.get('chats');
-        const chats = storage.chats || {};
+        if (!currentUser) return;
+        
+        const userChatsKey = `chats_${currentUser.email}`;
+        const storage = await chrome.storage.local.get(userChatsKey);
+        const chats = storage[userChatsKey] || {};
         const tab = await getCurrentTab();
         
         chats[currentChatId] = {
@@ -125,21 +243,22 @@ document.addEventListener('DOMContentLoaded', function() {
             timestamp: Date.now()
         };
         
-        await chrome.storage.local.set({ chats });
+        await chrome.storage.local.set({ [userChatsKey]: chats });
         loadChatHistory();
     }
 
     // Clear all chat history
     async function clearHistory() {
-        await chrome.storage.local.set({ chats: {} });
+        if (!currentUser) return;
+        
+        const userChatsKey = `chats_${currentUser.email}`;
+        await chrome.storage.local.set({ [userChatsKey]: {} });
         loadChatHistory();
         
-        // Reset current chat
         chatContainer.innerHTML = '';
         chatContainer.appendChild(typingIndicator);
         currentChatId = generateChatId();
         
-        // Add initial greeting
         setTimeout(() => {
             typeMessage('Hello! I can help you understand this page better. Ask me to summarize the content or find specific information.');
         }, 500);
@@ -334,7 +453,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const messages = [
             {
                 role: 'system',
-                content: 'You are a very helpful and intelligent assistant that helps users understand web pages and navigate to specific content. Your name is Clarify. If the user asks to find something, respond with the exact text to search for after your explanation. Please scroll to the specific text that the user asks for--if they do ask to find some specific information. '
+                content: 'You are a very helpful and intelligent AI assistant that helps users understand web pages and navigate to specific content. Your name is Clarify. You help the user by clarifying the page content and helping them navigate to specific content. This is your three big bullet points about who makes what you are: 1. Smart Chat: Engage with an AI that provides instant answers and insights about the webpage you are viewing. 2. Quick Summaries: Obtain concise summaries of lengthy articles and web pages to save time and remain informed. 3. Smart Navigation: Effortlessly navigate through long content by asking the AI to take you to specific parts of the page. If the user asks to find something, respond with the exact text to search for after your explanation. Please scroll to the specific text that the user asks for--if they do ask to find some specific information. If the user asks you to analyze/asks a query/asks anything about something on a pdf file/document, simply reply with something like you cant do pdfs or something unfortunatley'
             },
             {
                 role: 'user',
@@ -410,4 +529,33 @@ document.addEventListener('DOMContentLoaded', function() {
     setTimeout(() => {
         typeMessage('Hello! I can help you understand this page better. Ask me to summarize the content or find specific information.');
     }, 500);
+
+    const logoutButton = document.getElementById('logoutButton');
+
+    // Handle logout
+    async function handleLogout() {
+        if (!currentUser) return;
+        
+        await chrome.storage.local.remove('currentUser');
+        currentUser = null;
+        
+        chatContainer.innerHTML = '';
+        chatContainer.appendChild(typingIndicator);
+        currentChatId = generateChatId();
+        
+        authForm.reset();
+        authSubmit.textContent = 'Sign In';
+        authToggle.textContent = 'Sign Up';
+        authToggle.previousElementSibling.textContent = "Don't have an account? ";
+        hideAuthError();
+        
+        authOverlay.style.display = 'flex';
+        
+        if (isHistoryMenuOpen) {
+            toggleHistoryMenu();
+        }
+    }
+
+    // Add logout button event listener
+    logoutButton.addEventListener('click', handleLogout);
 }); 
