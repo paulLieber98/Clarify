@@ -127,6 +127,53 @@ document.addEventListener('DOMContentLoaded', function() {
         return Date.now().toString(36) + Math.random().toString(36).substr(2);
     }
 
+    // Load current chat session when extension opens
+    async function loadCurrentSession() {
+        if (!currentUser) return;
+        
+        const userChatsKey = `chats_${currentUser.email}`;
+        const currentChatKey = `current_chat_${currentUser.email}`;
+        
+        const storage = await chrome.storage.local.get([userChatsKey, currentChatKey]);
+        const chats = storage[userChatsKey] || {};
+        const savedChatId = storage[currentChatKey];
+        
+        if (savedChatId && chats[savedChatId]) {
+            currentChatId = savedChatId;
+            const chat = chats[savedChatId];
+            
+            // Restore chat messages
+            chatContainer.innerHTML = '';
+            chatContainer.appendChild(typingIndicator);
+            
+            for (const message of chat.messages) {
+                addMessage(message.content, message.isUser);
+            }
+        } else {
+            // Only show greeting for new chat sessions
+            setTimeout(() => {
+                typeMessage('Hello! I can help you understand this page better. Ask me to summarize the content or find specific information.');
+            }, 500);
+        }
+    }
+
+    // Save current chat ID when it changes
+    async function saveCurrentChatId() {
+        if (!currentUser) return;
+        
+        const currentChatKey = `current_chat_${currentUser.email}`;
+        await chrome.storage.local.set({ [currentChatKey]: currentChatId });
+    }
+
+    // Check if user is already logged in
+    chrome.storage.local.get(['currentUser'], async function(result) {
+        if (result.currentUser) {
+            currentUser = result.currentUser;
+            hideAuthOverlay();
+            await loadCurrentSession();
+        }
+    });
+
     // Load and display chat history
     async function loadChatHistory() {
         if (!currentUser) return;
@@ -224,6 +271,7 @@ document.addEventListener('DOMContentLoaded', function() {
             }
             
             currentChatId = chatId;
+            await saveCurrentChatId();
             toggleHistoryMenu();
         }
     }
@@ -244,6 +292,7 @@ document.addEventListener('DOMContentLoaded', function() {
         };
         
         await chrome.storage.local.set({ [userChatsKey]: chats });
+        await saveCurrentChatId();
         loadChatHistory();
     }
 
@@ -279,8 +328,9 @@ document.addEventListener('DOMContentLoaded', function() {
         chatContainer.innerHTML = '';
         chatContainer.appendChild(typingIndicator);
         
-        // Generate new chat ID
+        // Generate new chat ID and save it
         currentChatId = generateChatId();
+        await saveCurrentChatId();
         
         // Add initial greeting
         setTimeout(() => {
@@ -288,7 +338,9 @@ document.addEventListener('DOMContentLoaded', function() {
         }, 500);
         
         // Close history menu
-        toggleHistoryMenu();
+        if (isHistoryMenuOpen) {
+            toggleHistoryMenu();
+        }
     }
 
     // Event listeners for history
@@ -525,11 +577,6 @@ document.addEventListener('DOMContentLoaded', function() {
         messageInput.style.height = '40px'; // Reset to minimum height after sending
     };
 
-    // Initial greeting with typing animation
-    setTimeout(() => {
-        typeMessage('Hello! I can help you understand this page better. Ask me to summarize the content or find specific information.');
-    }, 500);
-
     const logoutButton = document.getElementById('logoutButton');
 
     // Handle logout
@@ -540,7 +587,8 @@ document.addEventListener('DOMContentLoaded', function() {
         const confirmLogout = confirm('Are you sure you want to log out?');
         if (!confirmLogout) return;
         
-        await chrome.storage.local.remove('currentUser');
+        const currentChatKey = `current_chat_${currentUser.email}`;
+        await chrome.storage.local.remove(['currentUser', currentChatKey]);
         currentUser = null;
         
         chatContainer.innerHTML = '';
