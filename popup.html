@@ -54,15 +54,16 @@
         .logo {
             width: 32px;
             height: 32px;
-            background: linear-gradient(135deg, #b87aff 0%, #9747FF 100%);
             border-radius: 8px;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-weight: 600;
-            font-size: 18px;
-            color: white;
-            text-shadow: 0 1px 2px rgba(0,0,0,0.1);
+        }
+
+        .logo img {
+            width: 100%;
+            height: 100%;
+            border-radius: 8px;
         }
 
         .header-text {
@@ -535,15 +536,17 @@
         .auth-logo {
             width: 64px;
             height: 64px;
-            background: linear-gradient(135deg, #b87aff 0%, #9747FF 100%);
             border-radius: 16px;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-weight: 600;
-            font-size: 32px;
-            color: white;
             margin: 0 auto 20px;
+        }
+
+        .auth-logo img {
+            width: 100%;
+            height: 100%;
+            border-radius: 16px;
         }
 
         .auth-title {
@@ -673,7 +676,9 @@
 <body>
     <div class="auth-overlay" id="authOverlay">
         <div class="auth-container">
-            <div class="auth-logo">C</div>
+            <div class="auth-logo">
+                <img src="clarify-logo2.png" alt="Clarify">
+            </div>
             <h1 class="auth-title">Welcome to Clarify</h1>
             <p class="auth-subtitle">Sign in to continue</p>
             <form class="auth-form" id="authForm">
@@ -691,7 +696,9 @@
     <div class="container">
         <div class="header">
             <div class="header-left">
-                <div class="logo">C</div>
+                <div class="logo">
+                    <img src="clarify-logo2.png" alt="Clarify">
+                </div>
                 <div class="header-text">
                     <h1>Clarify</h1>
                     <p>Your AI page assistant</p>

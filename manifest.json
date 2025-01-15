@@ -8,8 +8,14 @@
     "scripting",
     "storage"
   ],
+  "icons": {
+    "16": "clarify-logo2.png",
+    "48": "clarify-logo2.png",
+    "128": "clarify-logo2.png"
+  },
   "action": {
-    "default_popup": "popup.html"
+    "default_popup": "popup.html",
+    "default_icon": "clarify-logo2.png"
   },
   "content_scripts": [
     {
