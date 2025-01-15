@@ -9,13 +9,13 @@
     "storage"
   ],
   "icons": {
-    "16": "clarify-logo2.png",
-    "48": "clarify-logo2.png",
-    "128": "clarify-logo2.png"
+    "16": "clarifyfinal.png",
+    "48": "clarifyfinal.png",
+    "128": "clarifyfinal.png"
   },
   "action": {
     "default_popup": "popup.html",
-    "default_icon": "clarify-logo2.png"
+    "default_icon": "clarifyfinal.png"
   },
   "content_scripts": [
     {
