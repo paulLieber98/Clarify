@@ -319,6 +319,10 @@ document.addEventListener('DOMContentLoaded', function() {
         historyMenu.classList.toggle('show');
         if (isHistoryMenuOpen) {
             loadChatHistory();
+            // Adjust main container width when history is open
+            chatContainer.style.width = 'calc(100% - 300px)';
+        } else {
+            chatContainer.style.width = '100%';
         }
     }
 
@@ -358,8 +362,17 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 
     async function getCurrentTab() {
-        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-        return tab;
+        try {
+            // First try getting the tab from the side panel context
+            const [tab] = await chrome.tabs.query({ 
+                active: true, 
+                lastFocusedWindow: true 
+            });
+            return tab;
+        } catch (error) {
+            console.error('Error getting current tab:', error);
+            return null;
+        }
     }
 
     function showTypingIndicator() {
@@ -825,4 +838,13 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Add logout button event listener
     logoutButton.addEventListener('click', handleLogout);
+
+    // Add window resize handling for side panel
+    window.addEventListener('resize', () => {
+        // Adjust chat container height if needed
+        const chatContainer = document.getElementById('chatContainer');
+        if (chatContainer) {
+            chatContainer.style.height = `${window.innerHeight - 120}px`; // Adjust for input area
+        }
+    });
 }); 
