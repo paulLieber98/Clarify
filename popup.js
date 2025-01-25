@@ -602,7 +602,7 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
-    // Update the sendToChatGPT function
+    // Update the sendToChatGPT function to handle rate limits and errors better
     async function sendToChatGPT(messages) {
         try {
             const apiKey = getApiKey();
@@ -617,99 +617,122 @@ document.addEventListener('DOMContentLoaded', function() {
                     'Authorization': `Bearer ${apiKey}`
                 },
                 body: JSON.stringify({
-                    model: 'gpt-4',
+                    model: 'gpt-4o-mini-2024-07-18',
                     messages: messages,
                     max_tokens: 500
                 })
             });
 
+            // Handle rate limiting
+            if (response.status === 429) {
+                return 'I am receiving too many requests right now. Please try again in a moment.';
+            }
+
+            // Handle other error status codes
+            if (!response.ok) {
+                throw new Error(`API request failed with status ${response.status}`);
+            }
+
             const data = await response.json();
+            
+            // Add null checks for the response data
+            if (!data || !data.choices || !data.choices[0] || !data.choices[0].message) {
+                throw new Error('Invalid response format from API');
+            }
+
             return data.choices[0].message.content;
         } catch (error) {
             console.error('Error:', error);
-            return 'Sorry, there was an error processing your request.';
+            return 'Sorry, there was an error processing your request. Please try again.';
         }
     }
 
+    // Update the handleMessage function to handle errors better
     async function handleMessage() {
         const userMessage = messageInput.value.trim();
         if (!userMessage) return;
 
-        messageInput.value = '';
-        messageInput.disabled = true;
-        sendButton.disabled = true;
+        try {
+            messageInput.value = '';
+            messageInput.disabled = true;
+            sendButton.disabled = true;
 
-        addMessage(userMessage, true);
-        showTypingIndicator();
+            addMessage(userMessage, true);
+            showTypingIndicator();
 
-        const pageContent = await getPageContent();
-        const messages = [
-            {
-                role: 'system',
-                content: `You are a very helpful and intelligent AI assistant that helps users understand web pages and navigate to specific content. Your name is Clarify. When users ask to find or navigate to specific content, always include your response with "NAVIGATE: " followed by the exact text to find in quotes. For example: "I found that section. NAVIGATE: "exact text to scroll to"". You can also use "SCROLL TO: ", "FIND: ", or "GO TO: " for navigation commands.`
-            },
-            {
-                role: 'user',
-                content: `Page content: ${pageContent}\n\nUser question: ${userMessage}`
+            const pageContent = await getPageContent();
+            if (!pageContent) {
+                throw new Error('Failed to get page content');
             }
-        ];
 
-        const aiResponse = await sendToChatGPT(messages);
-        hideTypingIndicator();
-        
-        if (aiResponse && aiResponse.trim()) {
-            // Extract navigation command and clean the response
-            const navigationTriggers = [
-                'NAVIGATE:', 
-                'SCROLL TO:', 
-                'FIND:', 
-                'GO TO:'
+            const messages = [
+                {
+                    role: 'system',
+                    content: `You are a very helpful and intelligent AI assistant that helps users understand web pages and navigate to specific content. Your name is Clarify. When users ask to find or navigate to specific content, always include your response with "NAVIGATE: " followed by the exact text to find in quotes. For example: "I found that section. NAVIGATE: "exact text to scroll to"". You can also use "SCROLL TO: ", "FIND: ", or "GO TO: " for navigation commands.`
+                },
+                {
+                    role: 'user',
+                    content: `Page content: ${pageContent}\n\nUser question: ${userMessage}`
+                }
             ];
-            
-            let cleanResponse = aiResponse;
-            let navigationText = null;
 
-            // Look for navigation commands and extract the text to scroll to
-            for (const trigger of navigationTriggers) {
-                const triggerIndex = aiResponse.toUpperCase().indexOf(trigger);
-                if (triggerIndex !== -1) {
-                    // Find the quoted text after the trigger
-                    const match = aiResponse.slice(triggerIndex).match(/"([^"]+)"/);
-                    if (match) {
-                        navigationText = match[1].trim();
-                        // Remove the navigation command and quoted text from the response
-                        cleanResponse = aiResponse.slice(0, triggerIndex).trim();
-                        break;
+            const aiResponse = await sendToChatGPT(messages);
+            hideTypingIndicator();
+            
+            if (aiResponse && aiResponse.trim()) {
+                // Extract navigation command and clean the response
+                const navigationTriggers = [
+                    'NAVIGATE:', 
+                    'SCROLL TO:', 
+                    'FIND:', 
+                    'GO TO:'
+                ];
+                
+                let cleanResponse = aiResponse;
+                let navigationText = null;
+
+                // Look for navigation commands and extract the text to scroll to
+                for (const trigger of navigationTriggers) {
+                    const triggerIndex = aiResponse.toUpperCase().indexOf(trigger);
+                    if (triggerIndex !== -1) {
+                        // Find the quoted text after the trigger
+                        const match = aiResponse.slice(triggerIndex).match(/"([^"]+)"/);
+                        if (match) {
+                            navigationText = match[1].trim();
+                            // Remove the navigation command and quoted text from the response
+                            cleanResponse = aiResponse.slice(0, triggerIndex).trim();
+                            break;
+                        }
                     }
                 }
+
+                await typeMessage(cleanResponse);
+
+                if (navigationText) {
+                    setTimeout(() => {
+                        scrollToContent(navigationText);
+                    }, 500);
+                }
+
+                // Save chat history
+                const currentChat = {
+                    messages: [
+                        { content: userMessage, isUser: true },
+                        { content: cleanResponse, isUser: false }
+                    ]
+                };
+                
+                await saveChat(currentChat.messages);
             }
-
-            // Display the cleaned response without the navigation command
-            await typeMessage(cleanResponse);
-
-            // Execute the scroll if we found a navigation command
-            if (navigationText) {
-                setTimeout(() => {
-                    scrollToContent(navigationText);
-                }, 500);
-            }
-
-            // Save chat history with cleaned response
-            const storage = await chrome.storage.local.get('chats');
-            const chats = storage.chats || {};
-            const currentChat = chats[currentChatId] || { messages: [] };
-            
-            currentChat.messages.push(
-                { content: userMessage, isUser: true },
-                { content: cleanResponse, isUser: false }
-            );
-            
-            await saveChat(currentChat.messages);
+        } catch (error) {
+            console.error('Error in handleMessage:', error);
+            hideTypingIndicator();
+            await typeMessage('Sorry, there was an error processing your request. Please try again.');
+        } finally {
+            messageInput.disabled = false;
+            sendButton.disabled = false;
+            messageInput.focus();
         }
-
-        messageInput.disabled = false;
-        sendButton.disabled = false;
-        messageInput.focus();
     }
 
     // Auto-resize textarea
