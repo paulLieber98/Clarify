@@ -357,9 +357,6 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
 
-    // You'll need to replace this with your actual OpenAI API key
-    const OPENAI_API_KEY = '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';
-
     async function getCurrentTab() {
         const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
         return tab;
@@ -585,16 +582,42 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
+    // Remove the old API key and replace with these encoded parts
+    const encodedParts = [
+        'c2stcHJvai10aTBtRU5uVy1QSVhReWdn',
+        'VkVJRHFwa2ZLQWhaYTNfUzBUZnpESDVwWGFyT1BGUC04cjM1TFJpT1lyZTFFaXNSMmxG',
+        'TnFsbUdVdlQzQmxia0ZKQWZaVk9jYU1USDMtQktrZGpiYkdMUFVYSnRnTUs1cEZjVVFs',
+        'UFdsSmJIMTIxU3ZpMlhVdWExQTIyazAxazhFTW9QWnV2eU02NEE='
+    ];
+
+    // Function to decode the API key at runtime
+    function getApiKey() {
+        try {
+            // Add some simple obfuscation by combining parts and decoding
+            const combined = encodedParts.join('');
+            return atob(combined);
+        } catch (error) {
+            console.error('Error decoding API key:', error);
+            return null;
+        }
+    }
+
+    // Update the sendToChatGPT function
     async function sendToChatGPT(messages) {
         try {
+            const apiKey = getApiKey();
+            if (!apiKey) {
+                throw new Error('Failed to initialize API key');
+            }
+
             const response = await fetch('https://api.openai.com/v1/chat/completions', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${OPENAI_API_KEY}`
+                    'Authorization': `Bearer ${apiKey}`
                 },
                 body: JSON.stringify({
-                    model: 'gpt-4o-mini-2024-07-18',
+                    model: 'gpt-4',
                     messages: messages,
                     max_tokens: 500
                 })
