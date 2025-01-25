@@ -443,140 +443,166 @@ document.addEventListener('DOMContentLoaded', function() {
     async function scrollToContent(searchText) {
         const tab = await getCurrentTab();
         try {
-            // Try multiple times if needed
-            for (let attempt = 0; attempt < 2; attempt++) {
-                const response = await chrome.tabs.sendMessage(tab.id, {
-                    action: 'scrollToText',
-                    searchText: searchText
-                });
-                
-                if (response && response.success) {
-                    return true;
-                }
-                
-                // Small delay before retry
-                if (attempt === 0) {
-                    await new Promise(resolve => setTimeout(resolve, 100));
-                }
-            }
-            
-            // If message passing failed, fall back to executeScript
+            // Inject a more robust scrolling function into the page
             await chrome.scripting.executeScript({
                 target: { tabId: tab.id },
                 function: (text) => {
-                    // Helper function to get all text nodes
-                    function getAllTextNodes() {
+                    // Helper function to get text similarity score
+                    function similarityScore(str1, str2) {
+                        str1 = str1.toLowerCase().trim();
+                        str2 = str2.toLowerCase().trim();
+                        
+                        // Exact match gets highest score
+                        if (str1 === str2) return 1000;
+                        if (str1.includes(str2) || str2.includes(str1)) return 800;
+                        
+                        // Calculate word match score
+                        const words1 = str1.split(/\s+/);
+                        const words2 = str2.split(/\s+/);
+                        const commonWords = words1.filter(w => words2.includes(w));
+                        return (commonWords.length / Math.max(words1.length, words2.length)) * 600;
+                    }
+
+                    // Helper function to check if element is visible
+                    function isVisible(element) {
+                        if (!element) return false;
+                        
+                        const style = window.getComputedStyle(element);
+                        if (style.display === 'none' || 
+                            style.visibility === 'hidden' || 
+                            style.opacity === '0' || 
+                            element.offsetParent === null) {
+                            return false;
+                        }
+
+                        const rect = element.getBoundingClientRect();
+                        return rect.width > 0 && rect.height > 0;
+                    }
+
+                    // Helper function to get all text-containing elements
+                    function getTextElements() {
+                        const elements = [];
                         const walker = document.createTreeWalker(
                             document.body,
                             NodeFilter.SHOW_TEXT,
                             null,
                             false
                         );
-                        const nodes = [];
+
                         let node;
                         while (node = walker.nextNode()) {
-                            nodes.push(node);
-                        }
-                        return nodes;
-                    }
-
-                    // Helper function to check if element is visible
-                    function isVisible(element) {
-                        const style = window.getComputedStyle(element);
-                        return style.display !== 'none' && 
-                               style.visibility !== 'hidden' && 
-                               style.opacity !== '0';
-                    }
-
-                    // Find best matching node with more aggressive matching
-                    const textNodes = getAllTextNodes();
-                    let bestMatch = null;
-                    let bestMatchScore = 0;
-
-                    const searchTextLower = text.toLowerCase().trim();
-                    
-                    textNodes.forEach(node => {
-                        if (!isVisible(node.parentElement)) return;
-                        
-                        const nodeText = node.textContent.toLowerCase();
-                        
-                        // Try exact match first
-                        if (nodeText.includes(searchTextLower)) {
-                            const score = 1000 + (1000 - Math.abs(nodeText.length - searchTextLower.length));
-                            if (score > bestMatchScore) {
-                                bestMatch = node;
-                                bestMatchScore = score;
+                            const element = node.parentElement;
+                            if (element && 
+                                isVisible(element) && 
+                                !['SCRIPT', 'STYLE', 'NOSCRIPT'].includes(element.tagName)) {
+                                elements.push({
+                                    element: element,
+                                    text: element.textContent.trim(),
+                                    node: node
+                                });
                             }
                         }
-                        
-                        // If no exact match, try fuzzy matching
-                        if (!bestMatch) {
-                            const words = searchTextLower.split(' ');
-                            const matchedWords = words.filter(word => nodeText.includes(word));
-                            const score = (matchedWords.length / words.length) * 500;
-                            if (score > bestMatchScore) {
-                                bestMatch = node;
-                                bestMatchScore = score;
-                            }
-                        }
-                    });
+                        return elements;
+                    }
 
-                    if (bestMatch) {
-                        // Force scroll with multiple methods for better reliability
-                        try {
-                            // Highlight the found text more prominently
-                            const originalBackground = bestMatch.parentElement.style.backgroundColor;
-                            bestMatch.parentElement.style.backgroundColor = '#b87aff80'; // More visible highlight
+                    // Find best matching element
+                    function findBestMatch(searchText) {
+                        const elements = getTextElements();
+                        let bestMatch = null;
+                        let bestScore = -1;
+
+                        elements.forEach(({element, text, node}) => {
+                            // Skip empty text or very long text blocks
+                            if (!text || text.length > 1000) return;
                             
-                            // Scroll with both methods
-                            bestMatch.parentElement.scrollIntoView({
-                                behavior: 'smooth',
-                                block: 'center'
-                            });
+                            const score = similarityScore(text, searchText);
+                            if (score > bestScore) {
+                                bestScore = score;
+                                bestMatch = {element, node, score};
+                            }
+                        });
 
-                            // Forced window scroll after a small delay
-                            setTimeout(() => {
-                                const rect = bestMatch.parentElement.getBoundingClientRect();
+                        return bestMatch;
+                    }
+
+                    // Scroll to element with highlighting
+                    function scrollToElement(element) {
+                        if (!element) return false;
+
+                        // Try different scroll methods
+                        const scrollMethods = [
+                            // Method 1: scrollIntoView
+                            () => {
+                                element.scrollIntoView({
+                                    behavior: 'smooth',
+                                    block: 'center'
+                                });
+                            },
+                            // Method 2: window.scrollTo with offset
+                            () => {
+                                const rect = element.getBoundingClientRect();
+                                const scrollTop = window.pageYOffset + rect.top - (window.innerHeight / 2);
                                 window.scrollTo({
-                                    top: window.pageYOffset + rect.top - (window.innerHeight / 2),
+                                    top: scrollTop,
                                     behavior: 'smooth'
                                 });
-                                
-                                // Double-check scroll position after animation
-                                setTimeout(() => {
-                                    const newRect = bestMatch.parentElement.getBoundingClientRect();
-                                    if (Math.abs(newRect.top - (window.innerHeight / 2)) > 50) {
-                                        window.scrollTo({
-                                            top: window.pageYOffset + newRect.top - (window.innerHeight / 2),
-                                            behavior: 'auto' // Instant scroll if needed
-                                        });
-                                    }
-                                }, 500);
-                            }, 100);
+                            },
+                            // Method 3: Direct scroll
+                            () => {
+                                const rect = element.getBoundingClientRect();
+                                window.scrollTo(0, window.pageYOffset + rect.top - 100);
+                            }
+                        ];
 
-                            // Remove highlight after delay
-                            setTimeout(() => {
-                                bestMatch.parentElement.style.backgroundColor = originalBackground;
-                            }, 2000);
-
-                            return true;
-                        } catch (error) {
-                            console.error('Scroll error:', error);
-                            return false;
+                        // Try each scroll method
+                        for (const method of scrollMethods) {
+                            try {
+                                method();
+                                break;
+                            } catch (e) {
+                                continue;
+                            }
                         }
+
+                        // Add highlight effect
+                        const originalBackground = element.style.backgroundColor;
+                        const originalTransition = element.style.transition;
+                        
+                        element.style.transition = 'background-color 0.3s ease-in-out';
+                        element.style.backgroundColor = '#b87aff80';
+                        
+                        // Pulse animation
+                        setTimeout(() => {
+                            element.style.backgroundColor = 'transparent';
+                            setTimeout(() => {
+                                element.style.backgroundColor = '#b87aff80';
+                                setTimeout(() => {
+                                    element.style.backgroundColor = originalBackground;
+                                    element.style.transition = originalTransition;
+                                }, 500);
+                            }, 200);
+                        }, 200);
+
+                        return true;
                     }
-                    return false;
+
+                    // Main execution
+                    const bestMatch = findBestMatch(text);
+                    if (bestMatch && bestMatch.score > 100) {
+                        return scrollToElement(bestMatch.element);
+                    }
+
+                    // Fallback: try window.find() as last resort
+                    return window.find(text);
                 },
                 args: [searchText]
             });
         } catch (error) {
-            console.error('Error scrolling to content:', error);
+            console.error('Error in scrollToContent:', error);
             // Final fallback
             chrome.scripting.executeScript({
                 target: { tabId: tab.id },
-                function: (text) => {
-                    window.find(text);
-                },
+                function: (text) => window.find(text),
                 args: [searchText]
             });
         }
