@@ -445,26 +445,144 @@ document.addEventListener('DOMContentLoaded', function() {
 
     async function scrollToContent(searchText) {
         const tab = await getCurrentTab();
-        chrome.scripting.executeScript({
-            target: { tabId: tab.id },
-            function: (text) => {
-                const walker = document.createTreeWalker(
-                    document.body,
-                    NodeFilter.SHOW_TEXT,
-                    null,
-                    false
-                );
-
-                let node;
-                while (node = walker.nextNode()) {
-                    if (node.textContent.toLowerCase().includes(text.toLowerCase())) {
-                        node.parentElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                        break;
-                    }
+        try {
+            // Try multiple times if needed
+            for (let attempt = 0; attempt < 2; attempt++) {
+                const response = await chrome.tabs.sendMessage(tab.id, {
+                    action: 'scrollToText',
+                    searchText: searchText
+                });
+                
+                if (response && response.success) {
+                    return true;
                 }
-            },
-            args: [searchText]
-        });
+                
+                // Small delay before retry
+                if (attempt === 0) {
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                }
+            }
+            
+            // If message passing failed, fall back to executeScript
+            await chrome.scripting.executeScript({
+                target: { tabId: tab.id },
+                function: (text) => {
+                    // Helper function to get all text nodes
+                    function getAllTextNodes() {
+                        const walker = document.createTreeWalker(
+                            document.body,
+                            NodeFilter.SHOW_TEXT,
+                            null,
+                            false
+                        );
+                        const nodes = [];
+                        let node;
+                        while (node = walker.nextNode()) {
+                            nodes.push(node);
+                        }
+                        return nodes;
+                    }
+
+                    // Helper function to check if element is visible
+                    function isVisible(element) {
+                        const style = window.getComputedStyle(element);
+                        return style.display !== 'none' && 
+                               style.visibility !== 'hidden' && 
+                               style.opacity !== '0';
+                    }
+
+                    // Find best matching node with more aggressive matching
+                    const textNodes = getAllTextNodes();
+                    let bestMatch = null;
+                    let bestMatchScore = 0;
+
+                    const searchTextLower = text.toLowerCase().trim();
+                    
+                    textNodes.forEach(node => {
+                        if (!isVisible(node.parentElement)) return;
+                        
+                        const nodeText = node.textContent.toLowerCase();
+                        
+                        // Try exact match first
+                        if (nodeText.includes(searchTextLower)) {
+                            const score = 1000 + (1000 - Math.abs(nodeText.length - searchTextLower.length));
+                            if (score > bestMatchScore) {
+                                bestMatch = node;
+                                bestMatchScore = score;
+                            }
+                        }
+                        
+                        // If no exact match, try fuzzy matching
+                        if (!bestMatch) {
+                            const words = searchTextLower.split(' ');
+                            const matchedWords = words.filter(word => nodeText.includes(word));
+                            const score = (matchedWords.length / words.length) * 500;
+                            if (score > bestMatchScore) {
+                                bestMatch = node;
+                                bestMatchScore = score;
+                            }
+                        }
+                    });
+
+                    if (bestMatch) {
+                        // Force scroll with multiple methods for better reliability
+                        try {
+                            // Highlight the found text more prominently
+                            const originalBackground = bestMatch.parentElement.style.backgroundColor;
+                            bestMatch.parentElement.style.backgroundColor = '#b87aff80'; // More visible highlight
+                            
+                            // Scroll with both methods
+                            bestMatch.parentElement.scrollIntoView({
+                                behavior: 'smooth',
+                                block: 'center'
+                            });
+
+                            // Forced window scroll after a small delay
+                            setTimeout(() => {
+                                const rect = bestMatch.parentElement.getBoundingClientRect();
+                                window.scrollTo({
+                                    top: window.pageYOffset + rect.top - (window.innerHeight / 2),
+                                    behavior: 'smooth'
+                                });
+                                
+                                // Double-check scroll position after animation
+                                setTimeout(() => {
+                                    const newRect = bestMatch.parentElement.getBoundingClientRect();
+                                    if (Math.abs(newRect.top - (window.innerHeight / 2)) > 50) {
+                                        window.scrollTo({
+                                            top: window.pageYOffset + newRect.top - (window.innerHeight / 2),
+                                            behavior: 'auto' // Instant scroll if needed
+                                        });
+                                    }
+                                }, 500);
+                            }, 100);
+
+                            // Remove highlight after delay
+                            setTimeout(() => {
+                                bestMatch.parentElement.style.backgroundColor = originalBackground;
+                            }, 2000);
+
+                            return true;
+                        } catch (error) {
+                            console.error('Scroll error:', error);
+                            return false;
+                        }
+                    }
+                    return false;
+                },
+                args: [searchText]
+            });
+        } catch (error) {
+            console.error('Error scrolling to content:', error);
+            // Final fallback
+            chrome.scripting.executeScript({
+                target: { tabId: tab.id },
+                function: (text) => {
+                    window.find(text);
+                },
+                args: [searchText]
+            });
+        }
     }
 
     async function sendToChatGPT(messages) {
@@ -505,7 +623,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const messages = [
             {
                 role: 'system',
-                content: 'You are a very helpful and intelligent AI assistant that helps users understand web pages and navigate to specific content. Your name is Clarify. You help the user by clarifying the page content and helping them navigate to specific content. This is your three big bullet points about who makes what you are: 1. Smart Chat: Engage with an AI that provides instant answers and insights about the webpage you are viewing. 2. Quick Summaries: Obtain concise summaries of lengthy articles and web pages to save time and remain informed. 3. Smart Navigation: Effortlessly navigate through long content by asking the AI to take you to specific parts of the page. If the user asks to find something, respond with the exact text to search for after your explanation. Please scroll to the specific text that the user asks for--if they do ask to find some specific information. If the user asks you to analyze/asks a query/asks anything about something on a pdf file/document, simply reply with something like you cant do pdfs or something unfortunatley'
+                content: `You are a very helpful and intelligent AI assistant that helps users understand web pages and navigate to specific content. Your name is Clarify. When users ask to find or navigate to specific content, always include your response with "NAVIGATE: " followed by the exact text to find in quotes. For example: "I found that section. NAVIGATE: "exact text to scroll to"". You can also use "SCROLL TO: ", "FIND: ", or "GO TO: " for navigation commands.`
             },
             {
                 role: 'user',
@@ -517,28 +635,53 @@ document.addEventListener('DOMContentLoaded', function() {
         hideTypingIndicator();
         
         if (aiResponse && aiResponse.trim()) {
-            await typeMessage(aiResponse);
+            // Extract navigation command and clean the response
+            const navigationTriggers = [
+                'NAVIGATE:', 
+                'SCROLL TO:', 
+                'FIND:', 
+                'GO TO:'
+            ];
+            
+            let cleanResponse = aiResponse;
+            let navigationText = null;
 
-            // Save chat history
+            // Look for navigation commands and extract the text to scroll to
+            for (const trigger of navigationTriggers) {
+                const triggerIndex = aiResponse.toUpperCase().indexOf(trigger);
+                if (triggerIndex !== -1) {
+                    // Find the quoted text after the trigger
+                    const match = aiResponse.slice(triggerIndex).match(/"([^"]+)"/);
+                    if (match) {
+                        navigationText = match[1].trim();
+                        // Remove the navigation command and quoted text from the response
+                        cleanResponse = aiResponse.slice(0, triggerIndex).trim();
+                        break;
+                    }
+                }
+            }
+
+            // Display the cleaned response without the navigation command
+            await typeMessage(cleanResponse);
+
+            // Execute the scroll if we found a navigation command
+            if (navigationText) {
+                setTimeout(() => {
+                    scrollToContent(navigationText);
+                }, 500);
+            }
+
+            // Save chat history with cleaned response
             const storage = await chrome.storage.local.get('chats');
             const chats = storage.chats || {};
             const currentChat = chats[currentChatId] || { messages: [] };
             
             currentChat.messages.push(
                 { content: userMessage, isUser: true },
-                { content: aiResponse, isUser: false }
+                { content: cleanResponse, isUser: false }
             );
             
             await saveChat(currentChat.messages);
-
-            if (aiResponse.includes('NAVIGATE:')) {
-                const match = aiResponse.match(/"([^"]+)"/);
-                if (match) {
-                    setTimeout(() => {
-                        scrollToContent(match[1].trim());
-                    }, 500);
-                }
-            }
         }
 
         messageInput.disabled = false;

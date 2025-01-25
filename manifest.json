@@ -6,7 +6,8 @@
   "permissions": [
     "activeTab",
     "scripting",
-    "storage"
+    "storage",
+    "tabs"
   ],
   "icons": {
     "16": "clarifyfinal.png",
@@ -20,7 +21,11 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["content.js"]
+      "js": ["content.js"],
+      "run_at": "document_end"
     }
+  ],
+  "host_permissions": [
+    "<all_urls>"
   ]
 } 
