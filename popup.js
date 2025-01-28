@@ -11,13 +11,16 @@ document.addEventListener('DOMContentLoaded', function() {
     let isSignIn = true;
     let currentUser = null;
 
-    // Check if user is already logged in
-    chrome.storage.local.get(['currentUser'], function(result) {
-        if (result.currentUser) {
-            currentUser = result.currentUser;
+    // Check if user is already logged in using sync storage
+    async function checkCurrentUser() {
+        const user = await UserSync.getCurrentUser();
+        if (user) {
+            currentUser = user;
             hideAuthOverlay();
+            await loadCurrentSession();
         }
-    });
+    }
+    checkCurrentUser();
 
     // Toggle between sign in and sign up
     authToggle.addEventListener('click', () => {
@@ -47,9 +50,10 @@ document.addEventListener('DOMContentLoaded', function() {
         }
 
         try {
+            const users = await UserSync.getUsers();
+
             if (isSignIn) {
                 // Sign In
-                const users = await getUsers();
                 const user = users[email];
                 
                 if (!user) {
@@ -63,25 +67,29 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
 
                 currentUser = { email };
-                await chrome.storage.local.set({ currentUser });
+                await UserSync.setCurrentUser(currentUser);
                 hideAuthOverlay();
+                await loadCurrentSession();
             } else {
                 // Sign Up
-                const users = await getUsers();
-                
                 if (users[email]) {
                     showAuthError('Email already exists');
                     return;
                 }
 
-                users[email] = { password };
-                await chrome.storage.local.set({ users });
+                // Save new user
+                await UserSync.saveUser(email, { 
+                    password,
+                    created: new Date().toISOString()
+                });
                 
                 currentUser = { email };
-                await chrome.storage.local.set({ currentUser });
+                await UserSync.setCurrentUser(currentUser);
                 hideAuthOverlay();
+                await loadCurrentSession();
             }
         } catch (error) {
+            console.error('Auth error:', error);
             showAuthError('An error occurred. Please try again.');
         }
     });
@@ -131,29 +139,32 @@ document.addEventListener('DOMContentLoaded', function() {
     async function loadCurrentSession() {
         if (!currentUser) return;
         
-        const userChatsKey = `chats_${currentUser.email}`;
-        const currentChatKey = `current_chat_${currentUser.email}`;
-        
-        const storage = await chrome.storage.local.get([userChatsKey, currentChatKey]);
-        const chats = storage[userChatsKey] || {};
-        const savedChatId = storage[currentChatKey];
-        
-        if (savedChatId && chats[savedChatId]) {
-            currentChatId = savedChatId;
-            const chat = chats[savedChatId];
+        try {
+            // Get the last active chat ID
+            const savedChatId = await UserSync.getCurrentChatId(currentUser.email);
+            const chats = await UserSync.getUserChats(currentUser.email);
             
-            // Restore chat messages
-            chatContainer.innerHTML = '';
-            chatContainer.appendChild(typingIndicator);
-            
-            for (const message of chat.messages) {
-                addMessage(message.content, message.isUser);
+            if (savedChatId && chats[savedChatId]) {
+                currentChatId = savedChatId;
+                const chat = chats[savedChatId];
+                
+                // Restore chat messages
+                chatContainer.innerHTML = '';
+                chatContainer.appendChild(typingIndicator);
+                
+                for (const message of chat.messages) {
+                    addMessage(message.content, message.isUser);
+                }
+            } else {
+                // Show greeting for new chat sessions
+                currentChatId = generateChatId();
+                await UserSync.saveCurrentChatId(currentUser.email, currentChatId);
+                setTimeout(() => {
+                    typeMessage('Hello! I can help you understand this page better. Ask me to summarize the content or find specific information.');
+                }, 500);
             }
-        } else {
-            // Only show greeting for new chat sessions
-            setTimeout(() => {
-                typeMessage('Hello! I can help you understand this page better. Ask me to summarize the content or find specific information.');
-            }, 500);
+        } catch (error) {
+            console.error('Error loading session:', error);
         }
     }
 
@@ -165,74 +176,66 @@ document.addEventListener('DOMContentLoaded', function() {
         await chrome.storage.local.set({ [currentChatKey]: currentChatId });
     }
 
-    // Check if user is already logged in
-    chrome.storage.local.get(['currentUser'], async function(result) {
-        if (result.currentUser) {
-            currentUser = result.currentUser;
-            hideAuthOverlay();
-            await loadCurrentSession();
-        }
-    });
-
     // Load and display chat history
     async function loadChatHistory() {
         if (!currentUser) return;
         
-        const userChatsKey = `chats_${currentUser.email}`;
-        const storage = await chrome.storage.local.get(userChatsKey);
-        const chats = storage[userChatsKey] || {};
-        
-        historyItems.innerHTML = '';
-        
-        if (Object.keys(chats).length === 0) {
-            historyItems.innerHTML = `
-                <div class="empty-history">
-                    <div class="empty-history-icon">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#a3a3a3" stroke-width="2">
-                            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
-                        </svg>
-                    </div>
-                    No chat history yet
-                </div>`;
-            return;
-        }
+        try {
+            const chats = await UserSync.getUserChats(currentUser.email);
+            historyItems.innerHTML = '';
+            
+            if (Object.keys(chats).length === 0) {
+                historyItems.innerHTML = `
+                    <div class="empty-history">
+                        <div class="empty-history-icon">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#a3a3a3" stroke-width="2">
+                                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+                            </svg>
+                        </div>
+                        No chat history yet
+                    </div>`;
+                return;
+            }
 
-        // Sort chats by timestamp (newest first)
-        const sortedChats = Object.entries(chats)
-            .sort(([,a], [,b]) => b.timestamp - a.timestamp);
+            // Sort chats by timestamp (newest first)
+            const sortedChats = Object.entries(chats)
+                .sort(([,a], [,b]) => new Date(b.timestamp) - new Date(a.timestamp));
 
-        for (const [chatId, chat] of sortedChats) {
-            const historyItem = document.createElement('div');
-            historyItem.className = 'history-item';
-            
-            const itemContent = document.createElement('div');
-            itemContent.className = 'history-item-content';
-            
-            const lastMessage = chat.messages[chat.messages.length - 1];
-            const preview = lastMessage ? lastMessage.content.substring(0, 50) + '...' : 'Empty chat';
-            
-            itemContent.innerHTML = `
-                <div class="history-item-time">${new Date(chat.timestamp).toLocaleString()}</div>
-                <div class="history-item-preview">${preview}</div>
-            `;
-            
-            const deleteButton = document.createElement('button');
-            deleteButton.className = 'delete-chat';
-            deleteButton.innerHTML = `
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M6 18L18 6M6 6l12 12"></path>
-                </svg>
-            `;
-            
-            itemContent.addEventListener('click', () => loadChat(chatId));
-            deleteButton.addEventListener('click', async (e) => {
-                e.stopPropagation();
-                await deleteChat(chatId);
-            });
-            
-            historyItem.appendChild(itemContent);
-            historyItem.appendChild(deleteButton);
-            historyItems.appendChild(historyItem);
+            for (const [chatId, chat] of sortedChats) {
+                const historyItem = document.createElement('div');
+                historyItem.className = `history-item${chatId === currentChatId ? ' active' : ''}`;
+                
+                const itemContent = document.createElement('div');
+                itemContent.className = 'history-item-content';
+                
+                const lastMessage = chat.messages[chat.messages.length - 1];
+                const preview = lastMessage ? lastMessage.content.substring(0, 50) + '...' : 'Empty chat';
+                
+                itemContent.innerHTML = `
+                    <div class="history-item-time">${new Date(chat.timestamp).toLocaleString()}</div>
+                    <div class="history-item-preview">${preview}</div>
+                `;
+                
+                const deleteButton = document.createElement('button');
+                deleteButton.className = 'delete-chat';
+                deleteButton.innerHTML = `
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M6 18L18 6M6 6l12 12"></path>
+                    </svg>
+                `;
+                
+                itemContent.addEventListener('click', () => loadChat(chatId));
+                deleteButton.addEventListener('click', async (e) => {
+                    e.stopPropagation();
+                    await deleteChat(chatId);
+                });
+                
+                historyItem.appendChild(itemContent);
+                historyItem.appendChild(deleteButton);
+                historyItems.appendChild(historyItem);
+            }
+        } catch (error) {
+            console.error('Error loading chat history:', error);
         }
     }
 
@@ -280,20 +283,13 @@ document.addEventListener('DOMContentLoaded', function() {
     async function saveChat(messages) {
         if (!currentUser) return;
         
-        const userChatsKey = `chats_${currentUser.email}`;
-        const storage = await chrome.storage.local.get(userChatsKey);
-        const chats = storage[userChatsKey] || {};
-        const tab = await getCurrentTab();
-        
-        chats[currentChatId] = {
-            url: tab.url,
-            messages: messages,
-            timestamp: Date.now()
-        };
-        
-        await chrome.storage.local.set({ [userChatsKey]: chats });
-        await saveCurrentChatId();
-        loadChatHistory();
+        try {
+            await UserSync.saveUserChat(currentUser.email, currentChatId, messages);
+            await UserSync.saveCurrentChatId(currentUser.email, currentChatId);
+            await loadChatHistory(); // Refresh the history menu
+        } catch (error) {
+            console.error('Error saving chat:', error);
+        }
     }
 
     // Clear all chat history
@@ -811,28 +807,33 @@ document.addEventListener('DOMContentLoaded', function() {
     async function handleLogout() {
         if (!currentUser) return;
         
-        // Add confirmation dialog
         const confirmLogout = confirm('Are you sure you want to log out?');
         if (!confirmLogout) return;
         
-        const currentChatKey = `current_chat_${currentUser.email}`;
-        await chrome.storage.local.remove(['currentUser', currentChatKey]);
-        currentUser = null;
-        
-        chatContainer.innerHTML = '';
-        chatContainer.appendChild(typingIndicator);
-        currentChatId = generateChatId();
-        
-        authForm.reset();
-        authSubmit.textContent = 'Sign In';
-        authToggle.textContent = 'Sign Up';
-        authToggle.previousElementSibling.textContent = "Don't have an account? ";
-        hideAuthError();
-        
-        authOverlay.style.display = 'flex';
-        
-        if (isHistoryMenuOpen) {
-            toggleHistoryMenu();
+        try {
+            await UserSync.removeCurrentUser();
+            currentUser = null;
+            
+            // Clear chat and reset UI
+            chatContainer.innerHTML = '';
+            chatContainer.appendChild(typingIndicator);
+            currentChatId = generateChatId();
+            
+            // Reset auth form
+            authForm.reset();
+            authSubmit.textContent = 'Sign In';
+            authToggle.textContent = 'Sign Up';
+            authToggle.previousElementSibling.textContent = "Don't have an account? ";
+            hideAuthError();
+            
+            authOverlay.style.display = 'flex';
+            
+            if (isHistoryMenuOpen) {
+                toggleHistoryMenu();
+            }
+        } catch (error) {
+            console.error('Logout error:', error);
+            alert('Error logging out. Please try again.');
         }
     }
 
