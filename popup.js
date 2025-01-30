@@ -127,7 +127,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const clearHistoryButton = document.getElementById('clearHistory');
     const newChatButton = document.getElementById('newChat');
 
-    let currentChatId = generateChatId();
+    let currentChatId = null;
     let isHistoryMenuOpen = false;
 
     // Generate a unique ID for each chat session
@@ -437,183 +437,64 @@ document.addEventListener('DOMContentLoaded', function() {
 
     async function getPageContent() {
         const tab = await getCurrentTab();
-        return new Promise((resolve) => {
+        if (!tab) {
+            throw new Error('No active tab found');
+        }
+
+        // Don't try to get content from chrome:// URLs
+        if (tab.url.startsWith('chrome://')) {
+            throw new Error('Cannot access Chrome internal pages');
+        }
+
+        return new Promise((resolve, reject) => {
             chrome.scripting.executeScript({
                 target: { tabId: tab.id },
                 function: () => {
-                    return document.body.innerText;
+                    try {
+                        // Get text content while avoiding script tags
+                        const content = Array.from(document.querySelectorAll('body, body *'))
+                            .filter(el => {
+                                const style = window.getComputedStyle(el);
+                                return style.display !== 'none' && 
+                                       style.visibility !== 'hidden' && 
+                                       !['SCRIPT', 'STYLE'].includes(el.tagName);
+                            })
+                            .map(el => el.innerText)
+                            .filter(text => text.trim())
+                            .join('\n');
+                        return content || document.body.innerText;
+                    } catch (error) {
+                        return document.body.innerText;
+                    }
                 }
             }, (results) => {
-                resolve(results[0].result);
+                if (chrome.runtime.lastError) {
+                    reject(new Error(chrome.runtime.lastError.message));
+                } else if (!results || !results[0]) {
+                    reject(new Error('No content found'));
+                } else {
+                    resolve(results[0].result);
+                }
             });
         });
     }
 
     async function scrollToContent(searchText) {
+        if (!searchText) return;
+
         const tab = await getCurrentTab();
+        if (!tab) return;
+
         try {
-            // Inject a more robust scrolling function into the page
             await chrome.scripting.executeScript({
                 target: { tabId: tab.id },
                 function: (text) => {
-                    // Helper function to get text similarity score
-                    function similarityScore(str1, str2) {
-                        str1 = str1.toLowerCase().trim();
-                        str2 = str2.toLowerCase().trim();
-                        
-                        // Exact match gets highest score
-                        if (str1 === str2) return 1000;
-                        if (str1.includes(str2) || str2.includes(str1)) return 800;
-                        
-                        // Calculate word match score
-                        const words1 = str1.split(/\s+/);
-                        const words2 = str2.split(/\s+/);
-                        const commonWords = words1.filter(w => words2.includes(w));
-                        return (commonWords.length / Math.max(words1.length, words2.length)) * 600;
-                    }
-
-                    // Helper function to check if element is visible
-                    function isVisible(element) {
-                        if (!element) return false;
-                        
-                        const style = window.getComputedStyle(element);
-                        if (style.display === 'none' || 
-                            style.visibility === 'hidden' || 
-                            style.opacity === '0' || 
-                            element.offsetParent === null) {
-                            return false;
-                        }
-
-                        const rect = element.getBoundingClientRect();
-                        return rect.width > 0 && rect.height > 0;
-                    }
-
-                    // Helper function to get all text-containing elements
-                    function getTextElements() {
-                        const elements = [];
-                        const walker = document.createTreeWalker(
-                            document.body,
-                            NodeFilter.SHOW_TEXT,
-                            null,
-                            false
-                        );
-
-                        let node;
-                        while (node = walker.nextNode()) {
-                            const element = node.parentElement;
-                            if (element && 
-                                isVisible(element) && 
-                                !['SCRIPT', 'STYLE', 'NOSCRIPT'].includes(element.tagName)) {
-                                elements.push({
-                                    element: element,
-                                    text: element.textContent.trim(),
-                                    node: node
-                                });
-                            }
-                        }
-                        return elements;
-                    }
-
-                    // Find best matching element
-                    function findBestMatch(searchText) {
-                        const elements = getTextElements();
-                        let bestMatch = null;
-                        let bestScore = -1;
-
-                        elements.forEach(({element, text, node}) => {
-                            // Skip empty text or very long text blocks
-                            if (!text || text.length > 1000) return;
-                            
-                            const score = similarityScore(text, searchText);
-                            if (score > bestScore) {
-                                bestScore = score;
-                                bestMatch = {element, node, score};
-                            }
-                        });
-
-                        return bestMatch;
-                    }
-
-                    // Scroll to element with highlighting
-                    function scrollToElement(element) {
-                        if (!element) return false;
-
-                        // Try different scroll methods
-                        const scrollMethods = [
-                            // Method 1: scrollIntoView
-                            () => {
-                                element.scrollIntoView({
-                                    behavior: 'smooth',
-                                    block: 'center'
-                                });
-                            },
-                            // Method 2: window.scrollTo with offset
-                            () => {
-                                const rect = element.getBoundingClientRect();
-                                const scrollTop = window.pageYOffset + rect.top - (window.innerHeight / 2);
-                                window.scrollTo({
-                                    top: scrollTop,
-                                    behavior: 'smooth'
-                                });
-                            },
-                            // Method 3: Direct scroll
-                            () => {
-                                const rect = element.getBoundingClientRect();
-                                window.scrollTo(0, window.pageYOffset + rect.top - 100);
-                            }
-                        ];
-
-                        // Try each scroll method
-                        for (const method of scrollMethods) {
-                            try {
-                                method();
-                                break;
-                            } catch (e) {
-                                continue;
-                            }
-                        }
-
-                        // Add highlight effect
-                        const originalBackground = element.style.backgroundColor;
-                        const originalTransition = element.style.transition;
-                        
-                        element.style.transition = 'background-color 0.3s ease-in-out';
-                        element.style.backgroundColor = '#b87aff80';
-                        
-                        // Pulse animation
-                        setTimeout(() => {
-                            element.style.backgroundColor = 'transparent';
-                            setTimeout(() => {
-                                element.style.backgroundColor = '#b87aff80';
-                                setTimeout(() => {
-                                    element.style.backgroundColor = originalBackground;
-                                    element.style.transition = originalTransition;
-                                }, 500);
-                            }, 200);
-                        }, 200);
-
-                        return true;
-                    }
-
-                    // Main execution
-                    const bestMatch = findBestMatch(text);
-                    if (bestMatch && bestMatch.score > 100) {
-                        return scrollToElement(bestMatch.element);
-                    }
-
-                    // Fallback: try window.find() as last resort
                     return window.find(text);
                 },
                 args: [searchText]
             });
         } catch (error) {
-            console.error('Error in scrollToContent:', error);
-            // Final fallback
-            chrome.scripting.executeScript({
-                target: { tabId: tab.id },
-                function: (text) => window.find(text),
-                args: [searchText]
-            });
+            console.error('Error scrolling to content:', error);
         }
     }
 
@@ -700,14 +581,17 @@ document.addEventListener('DOMContentLoaded', function() {
                 throw new Error('Failed to get page content');
             }
 
+            // Truncate content if too long (to avoid token limits)
+            const truncatedContent = pageContent.slice(0, 15000); // Adjust size as needed
+
             const messages = [
                 {
                     role: 'system',
-                    content: `You are a very helpful and intelligent AI assistant that helps users understand web pages and navigate to specific content. Your name is Clarify. When users ask to find or navigate to specific content, always include your response with "NAVIGATE: " followed by the exact text to find in quotes. For example: "I found that section. NAVIGATE: "exact text to scroll to"". You can also use "SCROLL TO: ", "FIND: ", or "GO TO: " for navigation commands.`
+                    content: `You are a helpful AI assistant that helps users understand web pages and navigate to specific content. Your name is Clarify. When users ask to find or navigate to specific content, always include your response with "NAVIGATE: " followed by the exact text to find in quotes.`
                 },
                 {
                     role: 'user',
-                    content: `Page content: ${pageContent}\n\nUser question: ${userMessage}`
+                    content: `Page content: ${truncatedContent}\n\nUser question: ${userMessage}`
                 }
             ];
 
@@ -715,54 +599,36 @@ document.addEventListener('DOMContentLoaded', function() {
             hideTypingIndicator();
             
             if (aiResponse && aiResponse.trim()) {
-                // Extract navigation command and clean the response
-                const navigationTriggers = [
-                    'NAVIGATE:', 
-                    'SCROLL TO:', 
-                    'FIND:', 
-                    'GO TO:'
-                ];
-                
-                let cleanResponse = aiResponse;
-                let navigationText = null;
-
-                // Look for navigation commands and extract the text to scroll to
-                for (const trigger of navigationTriggers) {
-                    const triggerIndex = aiResponse.toUpperCase().indexOf(trigger);
-                    if (triggerIndex !== -1) {
-                        // Find the quoted text after the trigger
-                        const match = aiResponse.slice(triggerIndex).match(/"([^"]+)"/);
-                        if (match) {
-                            navigationText = match[1].trim();
-                            // Remove the navigation command and quoted text from the response
-                            cleanResponse = aiResponse.slice(0, triggerIndex).trim();
-                            break;
-                        }
-                    }
-                }
+                const navigationMatch = aiResponse.match(/(?:NAVIGATE|SCROLL TO|FIND|GO TO):\s*"([^"]+)"/i);
+                const cleanResponse = navigationMatch ? 
+                    aiResponse.slice(0, aiResponse.indexOf(navigationMatch[0])).trim() :
+                    aiResponse;
 
                 await typeMessage(cleanResponse);
 
-                if (navigationText) {
+                if (navigationMatch) {
                     setTimeout(() => {
-                        scrollToContent(navigationText);
+                        scrollToContent(navigationMatch[1].trim());
                     }, 500);
                 }
 
-                // Save chat history
-                const currentChat = {
-                    messages: [
-                        { content: userMessage, isUser: true },
-                        { content: cleanResponse, isUser: false }
-                    ]
-                };
-                
-                await saveChat(currentChat.messages);
+                // Save chat with size limits
+                if (currentUser) {
+                    try {
+                        const messages = [
+                            { content: userMessage, isUser: true },
+                            { content: cleanResponse, isUser: false }
+                        ];
+                        await saveChat(messages);
+                    } catch (error) {
+                        console.error('Error saving chat:', error);
+                    }
+                }
             }
         } catch (error) {
             console.error('Error in handleMessage:', error);
             hideTypingIndicator();
-            await typeMessage('Sorry, there was an error processing your request. Please try again.');
+            await typeMessage(error.message || 'Sorry, there was an error processing your request. Please try again.');
         } finally {
             messageInput.disabled = false;
             sendButton.disabled = false;

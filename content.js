@@ -5,18 +5,26 @@
 // Listen for messages from the popup
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === 'getPageContent') {
-        sendResponse({ content: document.body.innerText });
+        try {
+            const content = document.body.innerText;
+            sendResponse({ content });
+        } catch (error) {
+            sendResponse({ error: error.message });
+        }
         return true;
     }
     
     if (request.action === 'scrollToText') {
-        // Execute scrolling
-        const success = scrollToText(request.searchText);
-        // Send response back
-        sendResponse({ success: success });
-        return true; // Keep the message channel open
+        try {
+            const success = window.find(request.searchText);
+            sendResponse({ success });
+        } catch (error) {
+            sendResponse({ success: false, error: error.message });
+        }
+        return true;
     }
-    return true; // Always return true to indicate we'll respond asynchronously
+    
+    return true;
 });
 
 function scrollToText(searchText) {
@@ -110,9 +118,17 @@ function scrollToText(searchText) {
                 }, 500);
             }, 100);
 
-            // Remove highlight after delay
+            // Remove highlight after extended delay (5 seconds total)
             setTimeout(() => {
-                bestMatch.parentElement.style.backgroundColor = originalBackground;
+                // Fade out the highlight gradually
+                bestMatch.parentElement.style.transition = 'background-color 0.5s ease-in-out';
+                bestMatch.parentElement.style.backgroundColor = 'transparent';
+                setTimeout(() => {
+                    bestMatch.parentElement.style.backgroundColor = '#b87aff80';
+                    setTimeout(() => {
+                        bestMatch.parentElement.style.backgroundColor = originalBackground;
+                    }, 2000);
+                }, 400);
             }, 2000);
 
             return true;
