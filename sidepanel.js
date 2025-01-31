@@ -152,28 +152,26 @@ document.addEventListener('DOMContentLoaded', function() {
                 chatContainer.innerHTML = '';
                 chatContainer.appendChild(typingIndicator);
                 
-                for (const message of chat.messages) {
-                    addMessage(message.content, message.isUser);
+                // Make sure we have messages array
+                if (chat.messages && Array.isArray(chat.messages)) {
+                    for (const message of chat.messages) {
+                        addMessage(message.content, message.isUser);
+                    }
                 }
             } else {
-                // Show greeting for new chat sessions
-                currentChatId = generateChatId();
-                await UserSync.saveCurrentChatId(currentUser.email, currentChatId);
-                setTimeout(() => {
-                    typeMessage('Hello! I can help you understand this page better. Ask me to summarize the content or find specific information.');
-                }, 500);
+                // Start a new chat if no saved chat exists
+                await startNewChat();
             }
         } catch (error) {
             console.error('Error loading session:', error);
+            await startNewChat();
         }
     }
 
     // Save current chat ID when it changes
     async function saveCurrentChatId() {
         if (!currentUser) return;
-        
-        const currentChatKey = `current_chat_${currentUser.email}`;
-        await chrome.storage.local.set({ [currentChatKey]: currentChatId });
+        await UserSync.saveCurrentChatId(currentUser.email, currentChatId);
     }
 
     // Load and display chat history
@@ -243,49 +241,86 @@ document.addEventListener('DOMContentLoaded', function() {
     async function deleteChat(chatId) {
         if (!currentUser) return;
         
-        const userChatsKey = `chats_${currentUser.email}`;
-        const storage = await chrome.storage.local.get(userChatsKey);
-        const chats = storage[userChatsKey] || {};
-        
-        if (chatId === currentChatId) {
-            startNewChat();
+        try {
+            await UserSync.deleteUserChat(currentUser.email, chatId);
+            
+            if (chatId === currentChatId) {
+                await startNewChat();
+            }
+            
+            await loadChatHistory();
+        } catch (error) {
+            console.error('Error deleting chat:', error);
         }
-        
-        delete chats[chatId];
-        await chrome.storage.local.set({ [userChatsKey]: chats });
-        loadChatHistory();
     }
 
     // Load a specific chat
     async function loadChat(chatId) {
         if (!currentUser) return;
         
-        const userChatsKey = `chats_${currentUser.email}`;
-        const storage = await chrome.storage.local.get(userChatsKey);
-        const chats = storage[userChatsKey] || {};
-        const chat = chats[chatId];
-        
-        if (chat) {
-            chatContainer.innerHTML = '';
-            chatContainer.appendChild(typingIndicator);
+        try {
+            const chats = await UserSync.getUserChats(currentUser.email);
+            const chat = chats[chatId];
             
-            for (const message of chat.messages) {
-                addMessage(message.content, message.isUser);
+            if (chat) {
+                currentChatId = chatId;
+                await saveCurrentChatId();
+                
+                chatContainer.innerHTML = '';
+                chatContainer.appendChild(typingIndicator);
+                
+                for (const message of chat.messages) {
+                    addMessage(message.content, message.isUser);
+                }
+                
+                toggleHistoryMenu();
             }
-            
-            currentChatId = chatId;
-            await saveCurrentChatId();
-            toggleHistoryMenu();
+        } catch (error) {
+            console.error('Error loading chat:', error);
         }
     }
 
     // Save current chat
-    async function saveChat(messages) {
+    async function saveChat(newMessages) {
         if (!currentUser) return;
         
         try {
-            await UserSync.saveUserChat(currentUser.email, currentChatId, messages);
-            await UserSync.saveCurrentChatId(currentUser.email, currentChatId);
+            // Get existing chat history
+            const chats = await UserSync.getUserChats(currentUser.email);
+            let existingChat = chats[currentChatId];
+            
+            if (!existingChat) {
+                // Initialize new chat
+                existingChat = {
+                    messages: [],
+                    timestamp: new Date().toISOString()
+                };
+            }
+            
+            // Ensure messages array exists
+            if (!Array.isArray(existingChat.messages)) {
+                console.log('Fixing corrupted messages array');
+                existingChat.messages = [];
+            }
+            
+            // Add new messages
+            for (const msg of newMessages) {
+                if (!existingChat.messages.some(m => 
+                    m.content === msg.content && 
+                    m.isUser === msg.isUser
+                )) {
+                    existingChat.messages.push(msg);
+                }
+            }
+            
+            // Update timestamp
+            existingChat.timestamp = new Date().toISOString();
+            
+            // Debug log
+            console.log('Saving chat with messages:', existingChat.messages.length);
+            
+            // Save the updated chat
+            await UserSync.saveUserChat(currentUser.email, currentChatId, existingChat);
             await loadChatHistory(); // Refresh the history menu
         } catch (error) {
             console.error('Error saving chat:', error);
@@ -296,17 +331,13 @@ document.addEventListener('DOMContentLoaded', function() {
     async function clearHistory() {
         if (!currentUser) return;
         
-        const userChatsKey = `chats_${currentUser.email}`;
-        await chrome.storage.local.set({ [userChatsKey]: {} });
-        loadChatHistory();
-        
-        chatContainer.innerHTML = '';
-        chatContainer.appendChild(typingIndicator);
-        currentChatId = generateChatId();
-        
-        setTimeout(() => {
-            typeMessage('Hello! I can help you understand this page better. Ask me to summarize the content or find specific information.');
-        }, 500);
+        try {
+            await UserSync.clearUserChats(currentUser.email);
+            await startNewChat();
+            await loadChatHistory();
+        } catch (error) {
+            console.error('Error clearing history:', error);
+        }
     }
 
     // Toggle history menu
@@ -332,15 +363,19 @@ document.addEventListener('DOMContentLoaded', function() {
         currentChatId = generateChatId();
         await saveCurrentChatId();
         
-        // Add initial greeting
-        setTimeout(() => {
-            typeMessage('Hello! I can help you understand this page better. Ask me to summarize the content or find specific information.');
+        // Add initial greeting and save it
+        const greeting = 'Hello! I can help you understand this page better. Ask me to summarize the content or find specific information.';
+        setTimeout(async () => {
+            await typeMessage(greeting);
+            // Save the greeting as the first message
+            await saveChat([{ content: greeting, isUser: false }]);
         }, 500);
         
-        // Close history menu
+        // Close history menu and refresh it
         if (isHistoryMenuOpen) {
             toggleHistoryMenu();
         }
+        await loadChatHistory();
     }
 
     // Event listeners for history
@@ -373,7 +408,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     function showTypingIndicator() {
         typingIndicator.style.display = 'block';
-        chatContainer.scrollTop = chatContainer.scrollHeight;
+        scrollToBottom();
     }
 
     function hideTypingIndicator() {
@@ -396,6 +431,16 @@ document.addEventListener('DOMContentLoaded', function() {
             .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
     }
 
+    function scrollToBottom(smooth = true) {
+        requestAnimationFrame(() => {
+            const chatContainer = document.getElementById('chatContainer');
+            chatContainer.scrollTo({
+                top: chatContainer.scrollHeight,
+                behavior: smooth ? 'smooth' : 'auto'
+            });
+        });
+    }
+
     function addMessage(content, isUser = false) {
         const messageDiv = document.createElement('div');
         messageDiv.className = `message ${isUser ? 'user' : ''}`;
@@ -411,7 +456,16 @@ document.addEventListener('DOMContentLoaded', function() {
         
         messageDiv.appendChild(messageContent);
         chatContainer.insertBefore(messageDiv, typingIndicator);
-        chatContainer.scrollTop = chatContainer.scrollHeight;
+        
+        // Force immediate scroll
+        scrollToBottom(false);
+        
+        // Then smooth scroll after a brief delay to ensure content is rendered
+        setTimeout(() => {
+            scrollToBottom(true);
+        }, 50);
+        
+        return messageDiv;
     }
 
     async function typeMessage(message) {
@@ -430,10 +484,25 @@ document.addEventListener('DOMContentLoaded', function() {
         for (let word of words) {
             currentText += (currentText ? ' ' : '') + word;
             messageContent.innerHTML = parseMarkdown(currentText);
-            chatContainer.scrollTop = chatContainer.scrollHeight;
+            scrollToBottom(true);
             await new Promise(resolve => setTimeout(resolve, 50));
         }
     }
+
+    // Add scroll handling for dynamic content
+    const observer = new MutationObserver(() => {
+        scrollToBottom();
+    });
+
+    observer.observe(chatContainer, {
+        childList: true,
+        subtree: true
+    });
+
+    // Handle window resize
+    window.addEventListener('resize', () => {
+        scrollToBottom(false);
+    });
 
     async function getPageContent() {
         const tab = await getCurrentTab();
@@ -568,11 +637,12 @@ document.addEventListener('DOMContentLoaded', function() {
         const userMessage = messageInput.value.trim();
         if (!userMessage) return;
 
-        try {
-            messageInput.value = '';
-            messageInput.disabled = true;
-            sendButton.disabled = true;
+        messageInput.value = '';
+        messageInput.disabled = true;
+        sendButton.disabled = true;
 
+        try {
+            // Add user message to UI
             addMessage(userMessage, true);
             showTypingIndicator();
 
@@ -581,13 +651,12 @@ document.addEventListener('DOMContentLoaded', function() {
                 throw new Error('Failed to get page content');
             }
 
-            // Truncate content if too long (to avoid token limits)
-            const truncatedContent = pageContent.slice(0, 15000); // Adjust size as needed
+            const truncatedContent = pageContent.slice(0, 15000);
 
             const messages = [
                 {
                     role: 'system',
-                    content: `You are a helpful AI assistant that helps users understand web pages and navigate to specific content. Your name is Clarify. When users ask to find or navigate to specific content, always include your response with "NAVIGATE: " followed by the exact text to find in quotes.`
+                    content: `You are a helpful AI assistant that helps users understand web pages and navigate to specific content. Your name is Clarify. When users ask to find or navigate to specific content, respond with the relevant information and include "NAVIGATE: " followed by the exact text to find in quotes. Always confirm when you've found the requested section.`
                 },
                 {
                     role: 'user',
@@ -599,36 +668,98 @@ document.addEventListener('DOMContentLoaded', function() {
             hideTypingIndicator();
             
             if (aiResponse && aiResponse.trim()) {
-                const navigationMatch = aiResponse.match(/(?:NAVIGATE|SCROLL TO|FIND|GO TO):\s*"([^"]+)"/i);
-                const cleanResponse = navigationMatch ? 
-                    aiResponse.slice(0, aiResponse.indexOf(navigationMatch[0])).trim() :
-                    aiResponse;
-
+                const navigationMatch = aiResponse.match(/NAVIGATE:\s*"([^"]+)"/i);
+                
+                // First show the response
+                const cleanResponse = aiResponse.replace(/NAVIGATE:\s*"[^"]+"/i, '').trim();
                 await typeMessage(cleanResponse);
 
-                if (navigationMatch) {
-                    setTimeout(() => {
-                        scrollToContent(navigationMatch[1].trim());
-                    }, 500);
-                }
-
-                // Save chat with size limits
+                // Save the chat messages immediately after showing them
                 if (currentUser) {
                     try {
-                        const messages = [
+                        const newMessages = [
                             { content: userMessage, isUser: true },
                             { content: cleanResponse, isUser: false }
                         ];
-                        await saveChat(messages);
+                        await saveChat(newMessages);
                     } catch (error) {
                         console.error('Error saving chat:', error);
+                    }
+                }
+
+                // Then handle navigation if present
+                if (navigationMatch) {
+                    const textToFind = navigationMatch[1].trim();
+                    const tab = await getCurrentTab();
+                    
+                    if (!tab) {
+                        const errorMessage = "Sorry, I couldn't find the active tab.";
+                        await typeMessage(errorMessage);
+                        await saveChat([{ content: errorMessage, isUser: false }]);
+                        return;
+                    }
+
+                    try {
+                        const scrollMessage = "I'll scroll to the relevant section now...";
+                        await typeMessage(scrollMessage);
+                        await saveChat([{ content: scrollMessage, isUser: false }]);
+                        
+                        // Ensure content script is loaded
+                        await chrome.scripting.executeScript({
+                            target: { tabId: tab.id },
+                            files: ['content.js']
+                        }).catch(() => {});
+                        
+                        // Try with exact text first
+                        const response = await chrome.tabs.sendMessage(tab.id, {
+                            action: 'scrollToText',
+                            searchText: textToFind
+                        });
+
+                        if (!response?.success) {
+                            // Try with shorter versions of the text
+                            const phrases = textToFind
+                                .split(/[.,;]/)
+                                .map(p => p.trim())
+                                .filter(p => p.length > 8)
+                                .sort((a, b) => b.length - a.length);
+
+                            for (const phrase of phrases) {
+                                const retryResponse = await chrome.tabs.sendMessage(tab.id, {
+                                    action: 'scrollToText',
+                                    searchText: phrase
+                                });
+
+                                if (retryResponse?.success) {
+                                    const successMessage = "✓ Found and scrolled to the relevant section.";
+                                    await typeMessage(successMessage);
+                                    await saveChat([{ content: successMessage, isUser: false }]);
+                                    return;
+                                }
+                            }
+                            
+                            const notFoundMessage = "Sorry, I couldn't find that exact section. Please try with different keywords.";
+                            await typeMessage(notFoundMessage);
+                            await saveChat([{ content: notFoundMessage, isUser: false }]);
+                        } else {
+                            const successMessage = "✓ Found and scrolled to the section.";
+                            await typeMessage(successMessage);
+                            await saveChat([{ content: successMessage, isUser: false }]);
+                        }
+                    } catch (error) {
+                        console.error('Scroll error:', error);
+                        const errorMessage = "Sorry, I couldn't scroll to that section. Please try again.";
+                        await typeMessage(errorMessage);
+                        await saveChat([{ content: errorMessage, isUser: false }]);
                     }
                 }
             }
         } catch (error) {
             console.error('Error in handleMessage:', error);
             hideTypingIndicator();
-            await typeMessage(error.message || 'Sorry, there was an error processing your request. Please try again.');
+            const errorMessage = error.message || 'Sorry, there was an error processing your request. Please try again.';
+            await typeMessage(errorMessage);
+            await saveChat([{ content: errorMessage, isUser: false }]);
         } finally {
             messageInput.disabled = false;
             sendButton.disabled = false;

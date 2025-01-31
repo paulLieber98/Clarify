@@ -18,6 +18,12 @@ body {
     display: flex;
     flex-direction: column;
     gap: 16px;
+    scroll-behavior: smooth;
+    -webkit-overflow-scrolling: touch;
+    height: calc(100vh - 120px);
+    position: relative;
+    margin-bottom: 0;
+    padding-bottom: 16px;
 }
 
 .input-container {
@@ -43,6 +49,36 @@ body {
 
 #historyMenu.show {
     transform: translateX(0);
+}
+
+.message {
+    opacity: 1;
+    transform: translateY(0);
+    transition: opacity 0.3s ease, transform 0.3s ease;
+    max-width: 100%;
+    word-wrap: break-word;
+    margin-bottom: 8px;
+}
+
+.message.fade-in {
+    opacity: 0;
+    transform: translateY(20px);
+}
+
+/* Ensure the typing indicator stays at the bottom */
+.typing-indicator {
+    position: sticky;
+    bottom: 0;
+    align-self: flex-start;
+    z-index: 1;
+}
+
+.container {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    overflow: hidden;
+    position: relative;
 }
 
 /* Rest of your existing CSS remains the same */ 

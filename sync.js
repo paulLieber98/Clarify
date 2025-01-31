@@ -1,8 +1,8 @@
-// Sync user data across devices using chrome.storage.sync instead of local
+// Sync user data across devices using chrome.storage.local instead of sync
 const UserSync = {
     async getUsers() {
         try {
-            const result = await chrome.storage.sync.get(['users']);
+            const result = await chrome.storage.local.get(['users']);
             return result.users || {};
         } catch (error) {
             console.error('Error getting users:', error);
@@ -14,7 +14,7 @@ const UserSync = {
         try {
             const users = await this.getUsers();
             users[email] = userData;
-            await chrome.storage.sync.set({ users });
+            await chrome.storage.local.set({ users });
             return true;
         } catch (error) {
             console.error('Error saving user:', error);
@@ -24,7 +24,7 @@ const UserSync = {
 
     async getCurrentUser() {
         try {
-            const result = await chrome.storage.sync.get(['currentUser']);
+            const result = await chrome.storage.local.get(['currentUser']);
             return result.currentUser;
         } catch (error) {
             console.error('Error getting current user:', error);
@@ -34,7 +34,7 @@ const UserSync = {
 
     async setCurrentUser(user) {
         try {
-            await chrome.storage.sync.set({ currentUser: user });
+            await chrome.storage.local.set({ currentUser: user });
             return true;
         } catch (error) {
             console.error('Error setting current user:', error);
@@ -44,7 +44,7 @@ const UserSync = {
 
     async removeCurrentUser() {
         try {
-            await chrome.storage.sync.remove(['currentUser']);
+            await chrome.storage.local.remove(['currentUser']);
             return true;
         } catch (error) {
             console.error('Error removing current user:', error);
@@ -54,7 +54,7 @@ const UserSync = {
 
     async saveCurrentChatId(email, chatId) {
         try {
-            await chrome.storage.sync.set({ [`current_chat_${email}`]: chatId });
+            await chrome.storage.local.set({ [`current_chat_${email}`]: chatId });
             return true;
         } catch (error) {
             console.error('Error saving current chat ID:', error);
@@ -64,7 +64,7 @@ const UserSync = {
 
     async getCurrentChatId(email) {
         try {
-            const result = await chrome.storage.sync.get([`current_chat_${email}`]);
+            const result = await chrome.storage.local.get([`current_chat_${email}`]);
             return result[`current_chat_${email}`];
         } catch (error) {
             console.error('Error getting current chat ID:', error);
@@ -75,15 +75,26 @@ const UserSync = {
     async saveUserChat(email, chatId, messages) {
         try {
             const userChatsKey = `chats_${email}`;
-            const storage = await chrome.storage.sync.get([userChatsKey]);
+            const storage = await chrome.storage.local.get([userChatsKey]);
             const chats = storage[userChatsKey] || {};
             
-            chats[chatId] = {
+            // If messages is an object with messages array, use it directly
+            // Otherwise, wrap the messages array in an object with timestamp
+            const chatData = messages.messages ? messages : {
                 timestamp: new Date().toISOString(),
                 messages: messages
             };
+
+            // Debug log
+            console.log('Saving chat data:', chatData);
             
-            await chrome.storage.sync.set({ [userChatsKey]: chats });
+            chats[chatId] = chatData;
+            
+            await chrome.storage.local.set({ [userChatsKey]: chats });
+            await this.saveCurrentChatId(email, chatId);
+            
+            // Debug log
+            console.log('Saved chats:', chats);
             return true;
         } catch (error) {
             console.error('Error saving chat:', error);
@@ -94,11 +105,51 @@ const UserSync = {
     async getUserChats(email) {
         try {
             const userChatsKey = `chats_${email}`;
-            const storage = await chrome.storage.sync.get([userChatsKey]);
-            return storage[userChatsKey] || {};
+            const storage = await chrome.storage.local.get([userChatsKey]);
+            const chats = storage[userChatsKey] || {};
+            
+            // Debug log
+            console.log('Retrieved chats:', chats);
+            return chats;
         } catch (error) {
             console.error('Error getting user chats:', error);
             return {};
+        }
+    },
+
+    async deleteUserChat(email, chatId) {
+        try {
+            const userChatsKey = `chats_${email}`;
+            const storage = await chrome.storage.local.get([userChatsKey]);
+            const chats = storage[userChatsKey] || {};
+            
+            if (chats[chatId]) {
+                delete chats[chatId];
+                await chrome.storage.local.set({ [userChatsKey]: chats });
+                
+                // If we're deleting the current chat, clear the current chat ID
+                const currentChatId = await this.getCurrentChatId(email);
+                if (currentChatId === chatId) {
+                    await this.saveCurrentChatId(email, null);
+                }
+                return true;
+            }
+            return false;
+        } catch (error) {
+            console.error('Error deleting chat:', error);
+            return false;
+        }
+    },
+
+    async clearUserChats(email) {
+        try {
+            const userChatsKey = `chats_${email}`;
+            await chrome.storage.local.remove([userChatsKey]);
+            await this.saveCurrentChatId(email, null);
+            return true;
+        } catch (error) {
+            console.error('Error clearing chats:', error);
+            return false;
         }
     }
 }; 
