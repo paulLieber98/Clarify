@@ -1,4 +1,4 @@
-// Sync user data across devices using chrome.storage.local instead of sync
+// Sync user data across devices using chrome.storage.local for persistence
 const UserSync = {
     async getUsers() {
         try {
@@ -54,6 +54,7 @@ const UserSync = {
 
     async saveCurrentChatId(email, chatId) {
         try {
+            // Store current chat ID in local storage
             await chrome.storage.local.set({ [`current_chat_${email}`]: chatId });
             return true;
         } catch (error) {
@@ -72,20 +73,18 @@ const UserSync = {
         }
     },
 
+    // Keep chat history in local storage due to size limitations
     async saveUserChat(email, chatId, messages) {
         try {
             const userChatsKey = `chats_${email}`;
             const storage = await chrome.storage.local.get([userChatsKey]);
             const chats = storage[userChatsKey] || {};
             
-            // If messages is an object with messages array, use it directly
-            // Otherwise, wrap the messages array in an object with timestamp
             const chatData = messages.messages ? messages : {
                 timestamp: new Date().toISOString(),
                 messages: messages
             };
 
-            // Debug log
             console.log('Saving chat data:', chatData);
             
             chats[chatId] = chatData;
@@ -93,7 +92,6 @@ const UserSync = {
             await chrome.storage.local.set({ [userChatsKey]: chats });
             await this.saveCurrentChatId(email, chatId);
             
-            // Debug log
             console.log('Saved chats:', chats);
             return true;
         } catch (error) {
@@ -108,7 +106,6 @@ const UserSync = {
             const storage = await chrome.storage.local.get([userChatsKey]);
             const chats = storage[userChatsKey] || {};
             
-            // Debug log
             console.log('Retrieved chats:', chats);
             return chats;
         } catch (error) {
@@ -127,7 +124,6 @@ const UserSync = {
                 delete chats[chatId];
                 await chrome.storage.local.set({ [userChatsKey]: chats });
                 
-                // If we're deleting the current chat, clear the current chat ID
                 const currentChatId = await this.getCurrentChatId(email);
                 if (currentChatId === chatId) {
                     await this.saveCurrentChatId(email, null);

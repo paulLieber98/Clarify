@@ -518,32 +518,24 @@ document.addEventListener('DOMContentLoaded', function() {
         return new Promise((resolve, reject) => {
             chrome.scripting.executeScript({
                 target: { tabId: tab.id },
-                function: () => {
-                    try {
-                        // Get text content while avoiding script tags
-                        const content = Array.from(document.querySelectorAll('body, body *'))
-                            .filter(el => {
-                                const style = window.getComputedStyle(el);
-                                return style.display !== 'none' && 
-                                       style.visibility !== 'hidden' && 
-                                       !['SCRIPT', 'STYLE'].includes(el.tagName);
-                            })
-                            .map(el => el.innerText)
-                            .filter(text => text.trim())
-                            .join('\n');
-                        return content || document.body.innerText;
-                    } catch (error) {
-                        return document.body.innerText;
+                files: ['pdf.js', 'pdf.worker.js', 'content.js']
+            }).catch(() => {
+                // Script might already be injected, continue
+            }).finally(() => {
+                chrome.tabs.sendMessage(tab.id, { action: 'getPageContent' }, (response) => {
+                    if (chrome.runtime.lastError) {
+                        reject(new Error(chrome.runtime.lastError.message));
+                    } else if (!response) {
+                        reject(new Error('No response from content script'));
+                    } else if (!response.success) {
+                        reject(new Error(response.error || 'Failed to get page content'));
+                    } else {
+                        if (response.isPDF) {
+                            console.log('Processing PDF content');
+                        }
+                        resolve(response.content);
                     }
-                }
-            }, (results) => {
-                if (chrome.runtime.lastError) {
-                    reject(new Error(chrome.runtime.lastError.message));
-                } else if (!results || !results[0]) {
-                    reject(new Error('No content found'));
-                } else {
-                    resolve(results[0].result);
-                }
+                });
             });
         });
     }
@@ -656,7 +648,7 @@ document.addEventListener('DOMContentLoaded', function() {
             const messages = [
                 {
                     role: 'system',
-                    content: `You are a helpful AI assistant that helps users understand web pages and navigate to specific content. Your name is Clarify. When users ask to find or navigate to specific content, respond with the relevant information and include "NAVIGATE: " followed by the exact text to find in quotes. Always confirm when you've found the requested section.`
+                    content: `You are a helpful AI assistant that helps users understand web pages and navigate to specific content. Your name is Clarify. When users ask to find or navigate to specific content, respond with the relevant information and include "NAVIGATE: " followed by the exact text to find in quotes. Always confirm when you've found the requested section. Please also respond in the most concise way possible unless asked to elaborate/go in depth.`
                 },
                 {
                     role: 'user',

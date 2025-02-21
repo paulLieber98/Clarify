@@ -2,30 +2,87 @@
 // It's currently minimal as most functionality is handled in the popup
 // But it can be extended for additional features like highlighting text or adding visual indicators
 
-// Listen for messages from the popup
+// Initialize PDF.js
+if (typeof pdfjsLib !== 'undefined') {
+    pdfjsLib.GlobalWorkerOptions.workerSrc = chrome.runtime.getURL('pdf.worker.js');
+}
+
+// Function to check if current page is a PDF
+function isPDF() {
+    return document.contentType === 'application/pdf' || 
+           window.location.href.toLowerCase().endsWith('.pdf');
+}
+
+// Function to extract text from PDF
+async function extractPDFText() {
+    try {
+        const url = window.location.href;
+        const loadingTask = pdfjsLib.getDocument(url);
+        const pdf = await loadingTask.promise;
+        
+        let fullText = '';
+        
+        // Get total number of pages
+        const numPages = pdf.numPages;
+        
+        // Extract text from each page
+        for (let i = 1; i <= numPages; i++) {
+            const page = await pdf.getPage(i);
+            const textContent = await page.getTextContent();
+            const pageText = textContent.items.map(item => item.str).join(' ');
+            fullText += pageText + '\n\n';
+        }
+        
+        return fullText.trim();
+    } catch (error) {
+        console.error('Error extracting PDF text:', error);
+        throw new Error('Failed to extract text from PDF');
+    }
+}
+
+// Function to extract text from regular webpage
+function extractWebpageText() {
+    try {
+        // Get text content while avoiding script tags
+        const content = Array.from(document.querySelectorAll('body, body *'))
+            .filter(el => {
+                const style = window.getComputedStyle(el);
+                return style.display !== 'none' && 
+                       style.visibility !== 'hidden' && 
+                       !['SCRIPT', 'STYLE'].includes(el.tagName);
+            })
+            .map(el => el.innerText)
+            .filter(text => text.trim())
+            .join('\n');
+        return content || document.body.innerText;
+    } catch (error) {
+        console.error('Error extracting webpage text:', error);
+        return document.body.innerText;
+    }
+}
+
+// Listen for messages from the extension
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === 'getPageContent') {
-        try {
-            const content = document.body.innerText;
-            sendResponse({ content });
-        } catch (error) {
-            sendResponse({ error: error.message });
+        if (isPDF()) {
+            extractPDFText()
+                .then(text => sendResponse({ success: true, content: text, isPDF: true }))
+                .catch(error => sendResponse({ success: false, error: error.message, isPDF: true }));
+            return true; // Will respond asynchronously
+        } else {
+            const text = extractWebpageText();
+            sendResponse({ success: true, content: text, isPDF: false });
         }
-        return true;
-    }
-    
-    if (request.action === 'scrollToText') {
-        try {
-            const success = findAndScrollToText(request.searchText);
-            sendResponse({ success });
-        } catch (error) {
-            console.error('Error:', error);
-            sendResponse({ success: false });
+    } else if (request.action === 'scrollToText') {
+        if (isPDF()) {
+            // PDF scrolling not supported yet
+            sendResponse({ success: false, error: 'Scrolling in PDFs is not supported yet' });
+        } else {
+            const found = window.find(request.searchText);
+            sendResponse({ success: found });
         }
-        return true;
     }
-    
-    return false;
+    return true;
 });
 
 function findAndScrollToText(searchText) {
