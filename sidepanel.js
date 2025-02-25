@@ -820,10 +820,22 @@ document.addEventListener('DOMContentLoaded', function() {
 
             const truncatedContent = pageContent.slice(0, 15000);
 
+            // Check if the user is explicitly asking for navigation or location
+            const isNavigationRequest = /find|locate|scroll|show|navigate|go to|take me to|where is|point to/i.test(userMessage);
+            
+            // Modify the system prompt based on whether navigation is requested
+            let systemPrompt = `You are a helpful AI assistant that helps users understand web pages. Your name is Clarify. Please respond in the most concise way possible unless asked to elaborate/go in depth.`;
+            
+            if (isNavigationRequest) {
+                systemPrompt += ` When users ask to find or navigate to specific content, respond with the relevant information and include "NAVIGATE: " followed by the exact text to find in quotes. Always confirm when you've found the requested section.`;
+            } else {
+                systemPrompt += ` Focus on providing information without navigation unless explicitly requested. Do NOT include any "NAVIGATE: " instructions in your response unless the user specifically asks to find or go to a section.`;
+            }
+
             const messages = [
                 {
                     role: 'system',
-                    content: `You are a helpful AI assistant that helps users understand web pages and navigate to specific content. Your name is Clarify. When users ask to find or navigate to specific content, respond with the relevant information and include "NAVIGATE: " followed by the exact text to find in quotes. Always confirm when you've found the requested section. Please also respond in the most concise way possible unless asked to elaborate/go in depth.`
+                    content: systemPrompt
                 },
                 {
                     role: 'user',
@@ -866,8 +878,8 @@ document.addEventListener('DOMContentLoaded', function() {
                     }
                 }
 
-                // Then handle navigation if present
-                if (navigationMatch) {
+                // Then handle navigation if present AND it was a navigation request
+                if (navigationMatch && isNavigationRequest) {
                     const textToFind = navigationMatch[1].trim();
                     const tab = await getCurrentTab();
                     
