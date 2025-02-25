@@ -605,8 +605,74 @@ document.addEventListener('DOMContentLoaded', function() {
                             // Process and clean up the content
                             let content = response.content || '';
                             
-                            // Remove excessive whitespace
-                            content = content.replace(/\s+/g, ' ');
+                            try {
+                                // Try to extract structured content with headings and sections
+                                chrome.scripting.executeScript({
+                                    target: { tabId: tab.id },
+                                    function: () => {
+                                        // Helper function to get text content with structure
+                                        function getStructuredContent() {
+                                            // Get all headings
+                                            const headings = Array.from(document.querySelectorAll('h1, h2, h3, h4, h5, h6'));
+                                            
+                                            if (headings.length === 0) {
+                                                // If no headings, just return the text content
+                                                return document.body.innerText;
+                                            }
+                                            
+                                            // Build structured content with section markers
+                                            let structuredContent = '';
+                                            let sectionNumber = 1;
+                                            
+                                            headings.forEach((heading, index) => {
+                                                // Add the heading with a section marker
+                                                structuredContent += `\n\n### SECTION ${sectionNumber}: ${heading.innerText.trim()}\n\n`;
+                                                sectionNumber++;
+                                                
+                                                // Get all content until the next heading
+                                                let currentNode = heading.nextSibling;
+                                                let sectionContent = '';
+                                                
+                                                while (currentNode && 
+                                                      (index === headings.length - 1 || !headings.includes(currentNode))) {
+                                                    if (currentNode.nodeType === Node.TEXT_NODE) {
+                                                        sectionContent += currentNode.textContent;
+                                                    } else if (currentNode.nodeType === Node.ELEMENT_NODE) {
+                                                        // Skip if it's a heading
+                                                        if (!['H1', 'H2', 'H3', 'H4', 'H5', 'H6'].includes(currentNode.tagName)) {
+                                                            sectionContent += currentNode.innerText + '\n';
+                                                        } else {
+                                                            break;
+                                                        }
+                                                    }
+                                                    
+                                                    if (!currentNode.nextSibling) break;
+                                                    currentNode = currentNode.nextSibling;
+                                                }
+                                                
+                                                structuredContent += sectionContent.trim();
+                                            });
+                                            
+                                            return structuredContent;
+                                        }
+                                        
+                                        return getStructuredContent();
+                                    }
+                                }).then(result => {
+                                    if (result && result[0] && result[0].result) {
+                                        content = result[0].result;
+                                    }
+                                }).catch(error => {
+                                    console.error('Error getting structured content:', error);
+                                    // Continue with the original content if there's an error
+                                });
+                            } catch (error) {
+                                console.error('Error processing structured content:', error);
+                                // Continue with the original content if there's an error
+                            }
+                            
+                            // Remove excessive whitespace but preserve paragraph breaks
+                            content = content.replace(/\s+/g, ' ').replace(/\n\s+/g, '\n\n');
                             
                             // Remove very common elements that add noise
                             content = content.replace(/Cookie Policy|Privacy Policy|Terms of Service|Accept Cookies|Accept All Cookies/gi, '');
@@ -736,7 +802,7 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
-    // Improved scrollToContent function with better error handling and retry logic
+    // Improved scrollToContent function with better error handling, smooth scrolling and purple highlighting
     async function scrollToContent(searchText) {
         if (!searchText) return false;
 
@@ -744,16 +810,230 @@ document.addEventListener('DOMContentLoaded', function() {
         if (!tab) return false;
 
         try {
-            // Try to find the exact text first
-            const exactResult = await chrome.scripting.executeScript({
+            // First inject our custom highlighting and smooth scrolling code
+            await chrome.scripting.executeScript({
                 target: { tabId: tab.id },
-                function: (text) => {
-                    return window.find(text, false, false, true, false, true, false);
-                },
-                args: [searchText]
+                function: () => {
+                    // Create or update the highlight style
+                    let highlightStyle = document.getElementById('clarify-highlight-style');
+                    if (!highlightStyle) {
+                        highlightStyle = document.createElement('style');
+                        highlightStyle.id = 'clarify-highlight-style';
+                        document.head.appendChild(highlightStyle);
+                    }
+                    
+                    // Define the highlight style with purple background
+                    highlightStyle.textContent = `
+                        .clarify-highlight {
+                            background-color: rgba(128, 0, 255, 0.3) !important;
+                            border-radius: 2px;
+                            padding: 2px 0;
+                            transition: background-color 0.3s ease;
+                        }
+                    `;
+                    
+                    // Remove any existing highlights
+                    const existingHighlights = document.querySelectorAll('.clarify-highlight');
+                    existingHighlights.forEach(el => {
+                        const parent = el.parentNode;
+                        if (parent) {
+                            parent.replaceChild(document.createTextNode(el.textContent), el);
+                            parent.normalize();
+                        }
+                    });
+                    
+                    // Define our custom smooth scroll function
+                    window.clarifyScrollToElement = (element) => {
+                        if (!element) return;
+                        
+                        // Get the element's position
+                        const rect = element.getBoundingClientRect();
+                        const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+                        
+                        // Calculate position to scroll to (slightly above the element)
+                        const targetY = rect.top + scrollTop - 100;
+                        
+                        // Get current scroll position
+                        const startY = window.pageYOffset || document.documentElement.scrollTop;
+                        const distance = targetY - startY;
+                        
+                        // Implement custom smooth scrolling animation
+                        const duration = 800; // ms
+                        const startTime = performance.now();
+                        
+                        // Animate the scroll
+                        function animateScroll(currentTime) {
+                            const elapsedTime = currentTime - startTime;
+                            
+                            if (elapsedTime < duration) {
+                                // Easing function - easeInOutCubic for smooth acceleration and deceleration
+                                const t = elapsedTime / duration;
+                                const easeInOutCubic = t < 0.5 
+                                    ? 4 * t * t * t 
+                                    : 1 - Math.pow(-2 * t + 2, 3) / 2;
+                                
+                                // Calculate new position
+                                const newY = startY + (distance * easeInOutCubic);
+                                
+                                // Scroll to the new position
+                                window.scrollTo(0, newY);
+                                
+                                // Continue animation
+                                requestAnimationFrame(animateScroll);
+                            } else {
+                                // Ensure we end at exactly the right position
+                                window.scrollTo(0, targetY);
+                                
+                                // Add a subtle flash effect to draw attention after scrolling completes
+                                element.classList.add('clarify-highlight');
+                                
+                                // Pulse the highlight
+                                setTimeout(() => {
+                                    element.style.backgroundColor = 'rgba(128, 0, 255, 0.5)';
+                                    setTimeout(() => {
+                                        element.style.backgroundColor = 'rgba(128, 0, 255, 0.3)';
+                                    }, 300);
+                                }, 300);
+                            }
+                        }
+                        
+                        // Start the animation
+                        requestAnimationFrame(animateScroll);
+                    };
+                }
             });
             
-            if (exactResult && exactResult[0] && exactResult[0].result) {
+            // Function to find and highlight text
+            const findAndHighlight = async (text) => {
+                const result = await chrome.scripting.executeScript({
+                    target: { tabId: tab.id },
+                    function: (searchText) => {
+                        // Helper function to highlight text in an element
+                        function highlightTextInElement(element, text) {
+                            const innerHTML = element.innerHTML;
+                            const index = innerHTML.toLowerCase().indexOf(text.toLowerCase());
+                            
+                            if (index >= 0) {
+                                // Create the highlighted HTML
+                                const highlightedHTML = innerHTML.substring(0, index) + 
+                                    `<span class="clarify-highlight">${innerHTML.substring(index, index + text.length)}</span>` + 
+                                    innerHTML.substring(index + text.length);
+                                
+                                // Update the element's content
+                                element.innerHTML = highlightedHTML;
+                                
+                                // Return the highlighted element
+                                return element.querySelector('.clarify-highlight');
+                            }
+                            return null;
+                        }
+                        
+                        // First try the native find method to locate the text
+                        const found = window.find(searchText, false, false, true, false, true, false);
+                        
+                        if (found) {
+                            // Get the current selection
+                            const selection = window.getSelection();
+                            if (selection.rangeCount > 0) {
+                                const range = selection.getRangeAt(0);
+                                
+                                // Create a span to highlight the found text
+                                const highlightSpan = document.createElement('span');
+                                highlightSpan.className = 'clarify-highlight';
+                                
+                                try {
+                                    // Replace the selection with our highlighted span
+                                    range.surroundContents(highlightSpan);
+                                    
+                                    // Scroll to the highlighted element
+                                    window.clarifyScrollToElement(highlightSpan);
+                                    return true;
+                                } catch (e) {
+                                    // If surroundContents fails (e.g., if selection crosses element boundaries)
+                                    console.error('Highlight error:', e);
+                                    
+                                    // Try a different approach - find a nearby element to highlight
+                                    let currentNode = range.startContainer;
+                                    
+                                    // Navigate up to a text-containing element
+                                    while (currentNode && currentNode.nodeType !== Node.ELEMENT_NODE) {
+                                        currentNode = currentNode.parentNode;
+                                    }
+                                    
+                                    if (currentNode) {
+                                        // Try to highlight text in this element
+                                        const highlighted = highlightTextInElement(currentNode, searchText);
+                                        if (highlighted) {
+                                            window.clarifyScrollToElement(highlighted);
+                                            return true;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        
+                        // If native find method fails, try a more comprehensive search
+                        const textNodes = [];
+                        const walker = document.createTreeWalker(
+                            document.body, 
+                            NodeFilter.SHOW_TEXT, 
+                            null, 
+                            false
+                        );
+                        
+                        let node;
+                        while (node = walker.nextNode()) {
+                            if (node.nodeValue.toLowerCase().includes(searchText.toLowerCase())) {
+                                textNodes.push(node);
+                            }
+                        }
+                        
+                        if (textNodes.length > 0) {
+                            // Use the first matching text node
+                            const node = textNodes[0];
+                            const parent = node.parentNode;
+                            
+                            // Create a new span with the highlighted text
+                            const highlightSpan = document.createElement('span');
+                            highlightSpan.className = 'clarify-highlight';
+                            
+                            const text = node.nodeValue;
+                            const index = text.toLowerCase().indexOf(searchText.toLowerCase());
+                            
+                            // Split the text node and insert our highlight
+                            const before = text.substring(0, index);
+                            const highlight = text.substring(index, index + searchText.length);
+                            const after = text.substring(index + searchText.length);
+                            
+                            if (before) {
+                                parent.insertBefore(document.createTextNode(before), node);
+                            }
+                            
+                            highlightSpan.textContent = highlight;
+                            parent.insertBefore(highlightSpan, node);
+                            
+                            if (after) {
+                                parent.insertBefore(document.createTextNode(after), node);
+                            }
+                            
+                            parent.removeChild(node);
+                            
+                            // Scroll to the highlighted element
+                            window.clarifyScrollToElement(highlightSpan);
+                            return true;
+                        }
+                        
+                        return false;
+                    },
+                    args: [searchText]
+                });
+                
+                return result && result[0] && result[0].result;
+            };
+            
+            // Try to find the exact text first
+            const exactResult = await findAndHighlight(searchText);
+            if (exactResult) {
                 return true;
             }
             
@@ -767,6 +1047,29 @@ document.addEventListener('DOMContentLoaded', function() {
             });
             
             if (caseInsensitiveResult && caseInsensitiveResult[0] && caseInsensitiveResult[0].result) {
+                // If found, highlight it
+                await chrome.scripting.executeScript({
+                    target: { tabId: tab.id },
+                    function: () => {
+                        const selection = window.getSelection();
+                        if (selection.rangeCount > 0) {
+                            const range = selection.getRangeAt(0);
+                            const highlightSpan = document.createElement('span');
+                            highlightSpan.className = 'clarify-highlight';
+                            
+                            try {
+                                range.surroundContents(highlightSpan);
+                                window.clarifyScrollToElement(highlightSpan);
+                            } catch (e) {
+                                // If highlighting fails, at least scroll to the selection
+                                const node = selection.anchorNode;
+                                if (node) {
+                                    window.clarifyScrollToElement(node.parentElement);
+                                }
+                            }
+                        }
+                    }
+                });
                 return true;
             }
             
@@ -778,15 +1081,8 @@ document.addEventListener('DOMContentLoaded', function() {
                     .sort((a, b) => b.length - a.length);
                 
                 for (const phrase of phrases) {
-                    const partialResult = await chrome.scripting.executeScript({
-                        target: { tabId: tab.id },
-                        function: (text) => {
-                            return window.find(text, false, false, false, false, true, false);
-                        },
-                        args: [phrase]
-                    });
-                    
-                    if (partialResult && partialResult[0] && partialResult[0].result) {
+                    const partialResult = await findAndHighlight(phrase);
+                    if (partialResult) {
                         return true;
                     }
                 }
@@ -824,7 +1120,19 @@ document.addEventListener('DOMContentLoaded', function() {
             const isNavigationRequest = /find|locate|scroll|show|navigate|go to|take me to|where is|point to/i.test(userMessage);
             
             // Modify the system prompt based on whether navigation is requested
-            let systemPrompt = `You are a helpful AI assistant that helps users understand web pages. Your name is Clarify. Please respond in the most concise way possible unless asked to elaborate/go in depth.`;
+            let systemPrompt = `You are a helpful AI assistant that helps users understand web pages. Your name is Clarify. 
+
+1. ONLY provide information that is explicitly stated on the current page. If information is not on the page, say "I don't see that information on this page."
+
+2. When answering questions about specific topics, ALWAYS include the exact location or section where the information appears (e.g., "In the section titled 'X'" or "In paragraph Y").
+
+3. Be precise and specific in your answers. Quote directly from the page when possible.
+
+4. Keep track of the current topic of conversation. If a user asks a follow-up question about a specific topic, stay focused on that topic.
+
+5. If asked "where" something is mentioned, always try to provide the specific section, heading, or paragraph number.
+
+Please respond in the most concise way possible unless asked to elaborate/go in depth.`;
             
             if (isNavigationRequest) {
                 systemPrompt += ` When users ask to find or navigate to specific content, respond with the relevant information and include "NAVIGATE: " followed by the exact text to find in quotes. Always confirm when you've found the requested section.`;
@@ -832,11 +1140,36 @@ document.addEventListener('DOMContentLoaded', function() {
                 systemPrompt += ` Focus on providing information without navigation unless explicitly requested. Do NOT include any "NAVIGATE: " instructions in your response unless the user specifically asks to find or go to a section.`;
             }
 
+            // Get previous messages for context (up to 5 most recent exchanges)
+            let previousMessages = [];
+            if (currentUser) {
+                try {
+                    const chats = await UserSync.getUserChats(currentUser.email);
+                    const currentChat = chats[currentChatId];
+                    
+                    if (currentChat && Array.isArray(currentChat.messages)) {
+                        // Get the last 10 messages (5 exchanges) for context
+                        previousMessages = currentChat.messages
+                            .slice(-10)
+                            .map(msg => ({
+                                role: msg.isUser ? 'user' : 'assistant',
+                                content: msg.content
+                            }));
+                    }
+                } catch (error) {
+                    console.error('Error getting previous messages:', error);
+                    // Continue without context if there's an error
+                }
+            }
+
             const messages = [
                 {
                     role: 'system',
                     content: systemPrompt
                 },
+                // Add previous messages for context
+                ...previousMessages,
+                // Add the current page content and user question
                 {
                     role: 'user',
                     content: `Page content: ${truncatedContent}\n\nUser question: ${userMessage}`
