@@ -416,19 +416,39 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     function parseMarkdown(text) {
-        return text
-            // Bold
-            .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-            // Italic
-            .replace(/\*(.*?)\*/g, '<em>$1</em>')
-            // Code blocks
-            .replace(/```([\s\S]*?)```/g, '<pre><code>$1</code></pre>')
-            // Inline code
-            .replace(/`([^`]+)`/g, '<code>$1</code>')
-            // Lists
-            .replace(/^\s*[-*]\s+(.+)$/gm, '<li>$1</li>')
-            // Links
-            .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
+        if (!text) return '';
+        
+        try {
+            return text
+                // Escape HTML to prevent XSS
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                // Bold
+                .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+                // Italic
+                .replace(/\*(.*?)\*/g, '<em>$1</em>')
+                // Code blocks with language
+                .replace(/```([a-zA-Z]*)\n([\s\S]*?)```/g, '<pre><code class="language-$1">$2</code></pre>')
+                // Code blocks without language
+                .replace(/```([\s\S]*?)```/g, '<pre><code>$1</code></pre>')
+                // Inline code
+                .replace(/`([^`]+)`/g, '<code>$1</code>')
+                // Lists (convert to proper HTML lists)
+                .replace(/(?:^|\n)((?:\s*[-*]\s+.+(?:\n|$))+)/g, function(match, list) {
+                    const items = list.trim().split(/\n\s*[-*]\s+/).filter(Boolean);
+                    return '<ul>' + items.map(item => `<li>${item.trim()}</li>`).join('') + '</ul>';
+                })
+                // Links
+                .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
+                // Headers (h3 only, to not disrupt the UI)
+                .replace(/^###\s+(.*?)$/gm, '<h3>$1</h3>')
+                // Paragraphs
+                .replace(/\n\n/g, '<br><br>');
+        } catch (error) {
+            console.error('Error parsing markdown:', error);
+            return text; // Return the original text if parsing fails
+        }
     }
 
     function scrollToBottom(smooth = true) {
@@ -478,15 +498,46 @@ document.addEventListener('DOMContentLoaded', function() {
         
         chatContainer.insertBefore(messageDiv, typingIndicator);
         
-        const words = message.split(' ');
-        let currentText = '';
+        // For short messages, type them out character by character
+        // For longer messages, chunk them into words for a more natural feel
+        const isShortMessage = message.length < 80;
         
-        for (let word of words) {
-            currentText += (currentText ? ' ' : '') + word;
-            messageContent.innerHTML = parseMarkdown(currentText);
-            scrollToBottom(true);
-            await new Promise(resolve => setTimeout(resolve, 50));
+        if (isShortMessage) {
+            // Type character by character for short messages
+            let currentText = '';
+            for (let i = 0; i < message.length; i++) {
+                currentText += message[i];
+                messageContent.innerHTML = parseMarkdown(currentText);
+                scrollToBottom(true);
+                // Randomize the typing speed slightly for a more natural feel
+                const delay = Math.floor(Math.random() * 10) + 15; // 15-25ms
+                await new Promise(resolve => setTimeout(resolve, delay));
+            }
+        } else {
+            // Type word by word for longer messages
+            const words = message.split(' ');
+            let currentText = '';
+            let chunkSize = 1; // Start with 1 word at a time
+            
+            for (let i = 0; i < words.length; i += chunkSize) {
+                // Gradually increase chunk size for a more natural acceleration
+                if (i > 20) chunkSize = 4;
+                else if (i > 10) chunkSize = 2;
+                
+                const chunk = words.slice(i, i + chunkSize).join(' ');
+                currentText += (i > 0 ? ' ' : '') + chunk;
+                messageContent.innerHTML = parseMarkdown(currentText);
+                scrollToBottom(true);
+                
+                // Randomize the typing speed slightly
+                const delay = Math.floor(Math.random() * 15) + 25; // 25-40ms
+                await new Promise(resolve => setTimeout(resolve, delay));
+            }
         }
+        
+        // Make sure the final message is complete and properly formatted
+        messageContent.innerHTML = parseMarkdown(message);
+        scrollToBottom(true);
     }
 
     // Add scroll handling for dynamic content
@@ -516,47 +567,63 @@ document.addEventListener('DOMContentLoaded', function() {
         }
 
         return new Promise((resolve, reject) => {
+            // First try to inject the content script if it's not already there
             chrome.scripting.executeScript({
                 target: { tabId: tab.id },
                 files: ['pdf.js', 'pdf.worker.js', 'content.js']
             }).catch(() => {
                 // Script might already be injected, continue
             }).finally(() => {
-                chrome.tabs.sendMessage(tab.id, { action: 'getPageContent' }, (response) => {
-                    if (chrome.runtime.lastError) {
-                        reject(new Error(chrome.runtime.lastError.message));
-                    } else if (!response) {
-                        reject(new Error('No response from content script'));
-                    } else if (!response.success) {
-                        reject(new Error(response.error || 'Failed to get page content'));
-                    } else {
-                        if (response.isPDF) {
-                            console.log('Processing PDF content');
+                // Add retry logic for getting page content
+                let retries = 3;
+                const attemptGetContent = () => {
+                    chrome.tabs.sendMessage(tab.id, { action: 'getPageContent' }, (response) => {
+                        if (chrome.runtime.lastError) {
+                            const error = chrome.runtime.lastError.message;
+                            console.error('Error getting page content:', error);
+                            
+                            if (retries > 0) {
+                                retries--;
+                                // Wait a bit before retrying
+                                setTimeout(attemptGetContent, 500);
+                                return;
+                            }
+                            
+                            reject(new Error(error || 'Failed to get page content after multiple attempts'));
+                        } else if (!response) {
+                            if (retries > 0) {
+                                retries--;
+                                // Wait a bit before retrying
+                                setTimeout(attemptGetContent, 500);
+                                return;
+                            }
+                            
+                            reject(new Error('No response from content script after multiple attempts'));
+                        } else if (!response.success) {
+                            reject(new Error(response.error || 'Failed to get page content'));
+                        } else {
+                            // Process and clean up the content
+                            let content = response.content || '';
+                            
+                            // Remove excessive whitespace
+                            content = content.replace(/\s+/g, ' ');
+                            
+                            // Remove very common elements that add noise
+                            content = content.replace(/Cookie Policy|Privacy Policy|Terms of Service|Accept Cookies|Accept All Cookies/gi, '');
+                            
+                            // Truncate if too long
+                            if (content.length > 100000) {
+                                content = content.substring(0, 100000) + '... [content truncated]';
+                            }
+                            
+                            resolve(content);
                         }
-                        resolve(response.content);
-                    }
-                });
+                    });
+                };
+                
+                attemptGetContent();
             });
         });
-    }
-
-    async function scrollToContent(searchText) {
-        if (!searchText) return;
-
-        const tab = await getCurrentTab();
-        if (!tab) return;
-
-        try {
-            await chrome.scripting.executeScript({
-                target: { tabId: tab.id },
-                function: (text) => {
-                    return window.find(text);
-                },
-                args: [searchText]
-            });
-        } catch (error) {
-            console.error('Error scrolling to content:', error);
-        }
     }
 
     // Secure API key implementation that won't be detected by GitHub scanners
@@ -569,10 +636,6 @@ document.addEventListener('DOMContentLoaded', function() {
             
             // Combine the parts at runtime
             const key = part1 + part2 + part3;
-            
-            // Log a masked version of the key for debugging
-            const maskedKey = key.substring(0, 10) + '...' + key.substring(key.length - 5);
-            console.log('Using API key:', maskedKey);
             return key;
         } catch (error) {
             console.error('Error retrieving API key:', error);
@@ -592,24 +655,36 @@ document.addEventListener('DOMContentLoaded', function() {
                 };
             }
 
-            console.log("Sending request to OpenAI API...");
-            
             // Try with a more reliable model
             const requestBody = {
                 model: 'gpt-3.5-turbo',
                 messages: messages,
-                max_tokens: 500,
-                temperature: 0.7
+                max_tokens: 800,  // Increased token limit for more complete responses
+                temperature: 0.5  // Lower temperature for more consistent responses
             };
             
-            const response = await fetch('https://api.openai.com/v1/chat/completions', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${apiKey}`
-                },
-                body: JSON.stringify(requestBody)
-            });
+            // Add retry logic for network issues
+            let retries = 3;
+            let response;
+            
+            while (retries > 0) {
+                try {
+                    response = await fetch('https://api.openai.com/v1/chat/completions', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${apiKey}`
+                        },
+                        body: JSON.stringify(requestBody)
+                    });
+                    break; // If successful, exit the retry loop
+                } catch (error) {
+                    retries--;
+                    if (retries === 0) throw error;
+                    // Wait before retrying (exponential backoff)
+                    await new Promise(resolve => setTimeout(resolve, (3 - retries) * 1000));
+                }
+            }
             
             // Handle rate limiting
             if (response.status === 429) {
@@ -623,17 +698,16 @@ document.addEventListener('DOMContentLoaded', function() {
             if (response.status === 401) {
                 console.error('Authentication error: Invalid API key');
                 return { 
-                    content: 'Sorry, there was an authentication error. Please check the API key configuration.',
+                    content: 'Sorry, there was an authentication error. Please try again later.',
                     error: true 
                 };
             }
 
             // Handle other error status codes
             if (!response.ok) {
-                const errorText = await response.text();
-                console.error(`API request failed with status ${response.status}:`, errorText);
+                console.error(`API request failed with status ${response.status}`);
                 return { 
-                    content: `Sorry, there was an error (${response.status}). Please try again.`,
+                    content: `Sorry, there was an error. Please try again later.`,
                     error: true 
                 };
             }
@@ -642,9 +716,9 @@ document.addEventListener('DOMContentLoaded', function() {
             
             // Add null checks for the response data
             if (!data || !data.choices || !data.choices[0] || !data.choices[0].message) {
-                console.error('Invalid response format from API:', data);
+                console.error('Invalid response format from API');
                 return { 
-                    content: 'Sorry, I received an invalid response format. Please try again.',
+                    content: 'Sorry, I received an invalid response. Please try again.',
                     error: true 
                 };
             }
@@ -659,6 +733,69 @@ document.addEventListener('DOMContentLoaded', function() {
                 content: 'Sorry, there was an error processing your request. Please try again.',
                 error: true 
             };
+        }
+    }
+
+    // Improved scrollToContent function with better error handling and retry logic
+    async function scrollToContent(searchText) {
+        if (!searchText) return false;
+
+        const tab = await getCurrentTab();
+        if (!tab) return false;
+
+        try {
+            // Try to find the exact text first
+            const exactResult = await chrome.scripting.executeScript({
+                target: { tabId: tab.id },
+                function: (text) => {
+                    return window.find(text, false, false, true, false, true, false);
+                },
+                args: [searchText]
+            });
+            
+            if (exactResult && exactResult[0] && exactResult[0].result) {
+                return true;
+            }
+            
+            // If exact match fails, try with case insensitive search
+            const caseInsensitiveResult = await chrome.scripting.executeScript({
+                target: { tabId: tab.id },
+                function: (text) => {
+                    return window.find(text, false, false, false, false, true, false);
+                },
+                args: [searchText]
+            });
+            
+            if (caseInsensitiveResult && caseInsensitiveResult[0] && caseInsensitiveResult[0].result) {
+                return true;
+            }
+            
+            // If that fails too, try with partial text (split by spaces and try each phrase)
+            if (searchText.includes(' ')) {
+                const phrases = searchText.split(' ')
+                    .filter(phrase => phrase.length > 3)
+                    .map(phrase => phrase.trim())
+                    .sort((a, b) => b.length - a.length);
+                
+                for (const phrase of phrases) {
+                    const partialResult = await chrome.scripting.executeScript({
+                        target: { tabId: tab.id },
+                        function: (text) => {
+                            return window.find(text, false, false, false, false, true, false);
+                        },
+                        args: [phrase]
+                    });
+                    
+                    if (partialResult && partialResult[0] && partialResult[0].result) {
+                        return true;
+                    }
+                }
+            }
+            
+            return false;
+        } catch (error) {
+            console.error('Error scrolling to content:', error);
+            return false;
         }
     }
 
@@ -750,44 +887,60 @@ document.addEventListener('DOMContentLoaded', function() {
                         await chrome.scripting.executeScript({
                             target: { tabId: tab.id },
                             files: ['content.js']
-                        }).catch(() => {});
-                        
-                        // Try with exact text first
-                        const response = await chrome.tabs.sendMessage(tab.id, {
-                            action: 'scrollToText',
-                            searchText: textToFind
+                        }).catch(() => {
+                            // Script might already be injected, continue
                         });
+                        
+                        // Try to scroll to the content using our improved function
+                        const scrollSuccess = await scrollToContent(textToFind);
 
-                        if (!response?.success) {
+                        if (!scrollSuccess) {
+                            // If the exact text wasn't found, try with alternative approaches
+                            
                             // Try with shorter versions of the text
                             const phrases = textToFind
                                 .split(/[.,;]/)
                                 .map(p => p.trim())
-                                .filter(p => p.length > 8)
+                                .filter(p => p.length > 5)
                                 .sort((a, b) => b.length - a.length);
 
+                            let foundAny = false;
                             for (const phrase of phrases) {
-                                const retryResponse = await chrome.tabs.sendMessage(tab.id, {
-                                    action: 'scrollToText',
-                                    searchText: phrase
-                                });
-
-                                if (retryResponse?.success) {
-                                    const successMessage = "✓ Found and scrolled to the relevant section.";
-                                    await typeMessage(successMessage);
-                                    await saveChat([{ content: successMessage, isUser: false }]);
-                                    return;
+                                const phraseSuccess = await scrollToContent(phrase);
+                                if (phraseSuccess) {
+                                    foundAny = true;
+                                    break;
                                 }
                             }
                             
-                            const notFoundMessage = "Sorry, I couldn't find that exact section. Please try with different keywords.";
-                            await typeMessage(notFoundMessage);
-                            await saveChat([{ content: notFoundMessage, isUser: false }]);
-                        } else {
-                            const successMessage = "✓ Found and scrolled to the section.";
-                            await typeMessage(successMessage);
-                            await saveChat([{ content: successMessage, isUser: false }]);
+                            if (!foundAny) {
+                                // Try one more approach - look for keywords
+                                const keywords = textToFind
+                                    .split(/\s+/)
+                                    .filter(word => word.length > 5 && !/^(the|and|that|this|with|from|have|for)$/i.test(word))
+                                    .slice(0, 3);
+                                
+                                for (const keyword of keywords) {
+                                    const keywordSuccess = await scrollToContent(keyword);
+                                    if (keywordSuccess) {
+                                        foundAny = true;
+                                        break;
+                                    }
+                                }
+                                
+                                if (!foundAny) {
+                                    const notFoundMessage = "Sorry, I couldn't find that exact section. Please try with different keywords.";
+                                    await typeMessage(notFoundMessage);
+                                    await saveChat([{ content: notFoundMessage, isUser: false }]);
+                                    return;
+                                }
+                            }
                         }
+                        
+                        const successMessage = "✓ Found and scrolled to the section.";
+                        await typeMessage(successMessage);
+                        await saveChat([{ content: successMessage, isUser: false }]);
+                        
                     } catch (error) {
                         console.error('Scroll error:', error);
                         const errorMessage = "Sorry, I couldn't scroll to that section. Please try again.";
