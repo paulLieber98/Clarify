@@ -461,6 +461,46 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
+    function createMessageElement(content, isUser = false) {
+        const messageWrapper = document.createElement('div');
+        messageWrapper.className = 'message-wrapper';
+
+        const messageDiv = document.createElement('div');
+        messageDiv.className = `message ${isUser ? 'user' : ''}`;
+
+        const messageContent = document.createElement('div');
+        messageContent.className = 'message-content';
+        
+        // Set the content
+        messageContent.innerHTML = content;
+        
+        // Check if content is long enough to need collapsing
+        const shouldCollapse = messageContent.scrollHeight > 100;
+        
+        if (shouldCollapse) {
+            messageContent.classList.add('collapsed');
+            
+            const expandButton = document.createElement('button');
+            expandButton.className = 'expand-button';
+            expandButton.textContent = 'Show more';
+            
+            expandButton.addEventListener('click', () => {
+                messageContent.classList.remove('collapsed');
+                expandButton.style.display = 'none';
+                // Scroll to show the full content
+                messageContent.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            });
+            
+            messageDiv.appendChild(messageContent);
+            messageDiv.appendChild(expandButton);
+        } else {
+            messageDiv.appendChild(messageContent);
+        }
+
+        messageWrapper.appendChild(messageDiv);
+        return messageWrapper;
+    }
+
     function addMessage(content, isUser = false) {
         const messageDiv = document.createElement('div');
         messageDiv.className = `message ${isUser ? 'user' : ''}`;
@@ -469,7 +509,62 @@ document.addEventListener('DOMContentLoaded', function() {
         messageContent.className = 'message-content';
         
         if (!isUser) {
-            messageContent.innerHTML = parseMarkdown(content);
+            // Extract sources if they exist in the content
+            const sources = extractSources(content);
+            let processedContent = content;
+            
+            // Process content to format citation references
+            if (sources.length > 0) {
+                // Replace [1], [2], etc. with proper citation markers
+                sources.forEach((source, index) => {
+                    const marker = `[${index + 1}]`;
+                    processedContent = processedContent.replace(
+                        new RegExp(`\\[${index + 1}\\]`, 'g'), 
+                        `<span class="citation-marker">${marker}</span>`
+                    );
+                });
+            }
+            
+            messageContent.innerHTML = parseMarkdown(processedContent);
+            
+            // Add sources button and list if there are sources
+            if (sources.length > 0) {
+                const sourcesButton = document.createElement('button');
+                sourcesButton.className = 'sources-button';
+                sourcesButton.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 6V19M5 12H19" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg> Sources';
+                
+                const sourcesList = document.createElement('div');
+                sourcesList.className = 'sources-list';
+                
+                // Add each source as a clickable item
+                sources.forEach((sourceText, index) => {
+                    const sourceItem = document.createElement('div');
+                    sourceItem.className = 'source-item';
+                    
+                    const sourceNumber = document.createElement('span');
+                    sourceNumber.className = 'source-number';
+                    sourceNumber.textContent = `[${index + 1}]`;
+                    
+                    const sourceTextSpan = document.createElement('span');
+                    sourceTextSpan.className = 'source-text';
+                    sourceTextSpan.textContent = sourceText;
+                    sourceTextSpan.addEventListener('click', () => {
+                        scrollToContent(sourceText);
+                    });
+                    
+                    sourceItem.appendChild(sourceNumber);
+                    sourceItem.appendChild(sourceTextSpan);
+                    sourcesList.appendChild(sourceItem);
+                });
+                
+                // Toggle sources list visibility when button is clicked
+                sourcesButton.addEventListener('click', () => {
+                    sourcesList.classList.toggle('show');
+                });
+                
+                messageDiv.appendChild(sourcesButton);
+                messageDiv.appendChild(sourcesList);
+            }
         } else {
             messageContent.textContent = content;
         }
@@ -488,6 +583,61 @@ document.addEventListener('DOMContentLoaded', function() {
         return messageDiv;
     }
 
+    // Helper function to extract sources from message content
+    function extractSources(content) {
+        const sources = [];
+        
+        // Find all sources in the format [1] "Source text", multiple lines possible
+        // This better matches the format we're asking the AI to use
+        let inSourceSection = false;
+        const lines = content.split('\n');
+        
+        for (let i = 0; i < lines.length; i++) {
+            const line = lines[i].trim();
+            
+            // Check if this is a source reference line
+            const sourceMatch = line.match(/^\[(\d+)\]\s*(.+)$/);
+            if (sourceMatch) {
+                const sourceNum = parseInt(sourceMatch[1]);
+                let sourceText = sourceMatch[2].trim();
+                
+                // Remove quotes if they wrap the entire source
+                if (sourceText.startsWith('"') && sourceText.endsWith('"')) {
+                    sourceText = sourceText.substring(1, sourceText.length - 1);
+                }
+                
+                // Ensure we have an array element for this source number
+                while (sources.length < sourceNum) {
+                    sources.push('');
+                }
+                
+                // Set the source text at the correct index
+                sources[sourceNum - 1] = sourceText;
+                inSourceSection = true;
+            } 
+            // Check if this is continuation of a multi-line source
+            else if (inSourceSection && line && !line.match(/^\[\d+\]/)) {
+                let sourceText = line;
+                
+                // Remove quotes if they wrap the entire source
+                if (sourceText.startsWith('"') && sourceText.endsWith('"')) {
+                    sourceText = sourceText.substring(1, sourceText.length - 1);
+                }
+                
+                // Append to the last source if it exists
+                if (sources.length > 0) {
+                    sources[sources.length - 1] += ' ' + sourceText;
+                }
+            }
+            // If we hit an empty line after sources, we're probably done with sources
+            else if (inSourceSection && !line) {
+                inSourceSection = false;
+            }
+        }
+        
+        return sources;
+    }
+
     async function typeMessage(message) {
         const messageDiv = document.createElement('div');
         messageDiv.className = 'message';
@@ -498,46 +648,84 @@ document.addEventListener('DOMContentLoaded', function() {
         
         chatContainer.insertBefore(messageDiv, typingIndicator);
         
-        // For short messages, type them out character by character
-        // For longer messages, chunk them into words for a more natural feel
-        const isShortMessage = message.length < 80;
+        // Extract sources if they exist
+        const sources = extractSources(message);
+        let mainContent = message;
         
-        if (isShortMessage) {
-            // Type character by character for short messages
-            let currentText = '';
-            for (let i = 0; i < message.length; i++) {
-                currentText += message[i];
-                messageContent.innerHTML = parseMarkdown(currentText);
-                scrollToBottom(true);
-                // Randomize the typing speed slightly for a more natural feel
-                const delay = Math.floor(Math.random() * 10) + 15; // 15-25ms
-                await new Promise(resolve => setTimeout(resolve, delay));
-            }
-        } else {
-            // Type word by word for longer messages
-            const words = message.split(' ');
-            let currentText = '';
-            let chunkSize = 1; // Start with 1 word at a time
-            
-            for (let i = 0; i < words.length; i += chunkSize) {
-                // Gradually increase chunk size for a more natural acceleration
-                if (i > 20) chunkSize = 4;
-                else if (i > 10) chunkSize = 2;
-                
-                const chunk = words.slice(i, i + chunkSize).join(' ');
-                currentText += (i > 0 ? ' ' : '') + chunk;
-                messageContent.innerHTML = parseMarkdown(currentText);
-                scrollToBottom(true);
-                
-                // Randomize the typing speed slightly
-                const delay = Math.floor(Math.random() * 15) + 25; // 25-40ms
-                await new Promise(resolve => setTimeout(resolve, delay));
+        // If there are sources, separate them from the main content
+        if (sources.length > 0) {
+            // Find the index of the first source marker [1]
+            const firstSourceIndex = message.indexOf('[1]');
+            if (firstSourceIndex > -1) {
+                mainContent = message.substring(0, firstSourceIndex);
             }
         }
         
-        // Make sure the final message is complete and properly formatted
-        messageContent.innerHTML = parseMarkdown(message);
-        scrollToBottom(true);
+        const words = mainContent.split(' ');
+        for (let i = 0; i < words.length; i++) {
+            let word = words[i];
+            
+            // Format citation markers during typing
+            if (/\[\d+\]/.test(word)) {
+                const markerMatch = word.match(/\[(\d+)\]/);
+                if (markerMatch) {
+                    const marker = markerMatch[0];
+                    word = word.replace(marker, `<span class="citation-marker">${marker}</span>`);
+                }
+            }
+            
+            // Add space after each word except the last one
+            if (i < words.length - 1) {
+                word += ' ';
+            }
+            
+            messageContent.innerHTML += word;
+            scrollToBottom(true);
+            
+            // Random typing delay for realistic effect
+            await new Promise(resolve => setTimeout(resolve, Math.random() * 10 + 10));
+        }
+        
+        // Add sources button and list if there are sources
+        if (sources.length > 0) {
+            const sourcesButton = document.createElement('button');
+            sourcesButton.className = 'sources-button';
+            sourcesButton.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 6V19M5 12H19" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg> Sources';
+            
+            const sourcesList = document.createElement('div');
+            sourcesList.className = 'sources-list';
+            
+            // Add each source as a clickable item
+            sources.forEach((sourceText, index) => {
+                const sourceItem = document.createElement('div');
+                sourceItem.className = 'source-item';
+                
+                const sourceNumber = document.createElement('span');
+                sourceNumber.className = 'source-number';
+                sourceNumber.textContent = `[${index + 1}]`;
+                
+                const sourceTextSpan = document.createElement('span');
+                sourceTextSpan.className = 'source-text';
+                sourceTextSpan.textContent = sourceText;
+                sourceTextSpan.addEventListener('click', () => {
+                    scrollToContent(sourceText);
+                });
+                
+                sourceItem.appendChild(sourceNumber);
+                sourceItem.appendChild(sourceTextSpan);
+                sourcesList.appendChild(sourceItem);
+            });
+            
+            // Toggle sources list visibility when button is clicked
+            sourcesButton.addEventListener('click', () => {
+                sourcesList.classList.toggle('show');
+            });
+            
+            messageDiv.appendChild(sourcesButton);
+            messageDiv.appendChild(sourcesList);
+        }
+        
+        return messageDiv;
     }
 
     // Add scroll handling for dynamic content
@@ -829,6 +1017,13 @@ document.addEventListener('DOMContentLoaded', function() {
                             border-radius: 2px;
                             padding: 2px 0;
                             transition: background-color 0.3s ease;
+                            animation: clarify-pulse 2s infinite;
+                        }
+                        
+                        @keyframes clarify-pulse {
+                            0% { background-color: rgba(128, 0, 255, 0.3); }
+                            50% { background-color: rgba(128, 0, 255, 0.5); }
+                            100% { background-color: rgba(128, 0, 255, 0.3); }
                         }
                     `;
                     
@@ -883,17 +1078,6 @@ document.addEventListener('DOMContentLoaded', function() {
                             } else {
                                 // Ensure we end at exactly the right position
                                 window.scrollTo(0, targetY);
-                                
-                                // Add a subtle flash effect to draw attention after scrolling completes
-                                element.classList.add('clarify-highlight');
-                                
-                                // Pulse the highlight
-                                setTimeout(() => {
-                                    element.style.backgroundColor = 'rgba(128, 0, 255, 0.5)';
-                                    setTimeout(() => {
-                                        element.style.backgroundColor = 'rgba(128, 0, 255, 0.3)';
-                                    }, 300);
-                                }, 300);
                             }
                         }
                         
@@ -902,108 +1086,56 @@ document.addEventListener('DOMContentLoaded', function() {
                     };
                 }
             });
-            
-            // Function to find and highlight text
-            const findAndHighlight = async (text) => {
+
+            // Define the findAndHighlight function with fuzzy matching capability
+            const findAndHighlight = async (searchText) => {
+                // Try exact match first
                 const result = await chrome.scripting.executeScript({
                     target: { tabId: tab.id },
-                    function: (searchText) => {
-                        // Helper function to highlight text in an element
+                    function: (text) => {
+                        // Clean up the search text - remove quotes and extra whitespace
+                        text = text.replace(/^["']|["']$/g, '').trim();
+                        
+                        // Function to highlight text in an element
                         function highlightTextInElement(element, text) {
-                            const innerHTML = element.innerHTML;
-                            const index = innerHTML.toLowerCase().indexOf(text.toLowerCase());
+                            const content = element.textContent;
+                            const index = content.indexOf(text);
                             
-                            if (index >= 0) {
-                                // Create the highlighted HTML
-                                const highlightedHTML = innerHTML.substring(0, index) + 
-                                    `<span class="clarify-highlight">${innerHTML.substring(index, index + text.length)}</span>` + 
-                                    innerHTML.substring(index + text.length);
-                                
-                                // Update the element's content
-                                element.innerHTML = highlightedHTML;
-                                
-                                // Return the highlighted element
-                                return element.querySelector('.clarify-highlight');
-                            }
-                            return null;
-                        }
-                        
-                        // First try the native find method to locate the text
-                        const found = window.find(searchText, false, false, true, false, true, false);
-                        
-                        if (found) {
-                            // Get the current selection
-                            const selection = window.getSelection();
-                            if (selection.rangeCount > 0) {
-                                const range = selection.getRangeAt(0);
-                                
-                                // Create a span to highlight the found text
-                                const highlightSpan = document.createElement('span');
-                                highlightSpan.className = 'clarify-highlight';
-                                
-                                try {
-                                    // Replace the selection with our highlighted span
-                                    range.surroundContents(highlightSpan);
-                                    
-                                    // Scroll to the highlighted element
-                                    window.clarifyScrollToElement(highlightSpan);
-                                    return true;
-                                } catch (e) {
-                                    // If surroundContents fails (e.g., if selection crosses element boundaries)
-                                    console.error('Highlight error:', e);
-                                    
-                                    // Try a different approach - find a nearby element to highlight
-                                    let currentNode = range.startContainer;
-                                    
-                                    // Navigate up to a text-containing element
-                                    while (currentNode && currentNode.nodeType !== Node.ELEMENT_NODE) {
-                                        currentNode = currentNode.parentNode;
-                                    }
-                                    
-                                    if (currentNode) {
-                                        // Try to highlight text in this element
-                                        const highlighted = highlightTextInElement(currentNode, searchText);
-                                        if (highlighted) {
-                                            window.clarifyScrollToElement(highlighted);
-                                            return true;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        
-                        // If native find method fails, try a more comprehensive search
-                        const textNodes = [];
-                        const walker = document.createTreeWalker(
-                            document.body, 
-                            NodeFilter.SHOW_TEXT, 
-                            null, 
-                            false
-                        );
-                        
-                        let node;
-                        while (node = walker.nextNode()) {
-                            if (node.nodeValue.toLowerCase().includes(searchText.toLowerCase())) {
-                                textNodes.push(node);
-                            }
-                        }
-                        
-                        if (textNodes.length > 0) {
-                            // Use the first matching text node
-                            const node = textNodes[0];
-                            const parent = node.parentNode;
+                            if (index === -1) return false;
                             
-                            // Create a new span with the highlighted text
+                            // Create a highlight span
                             const highlightSpan = document.createElement('span');
                             highlightSpan.className = 'clarify-highlight';
                             
-                            const text = node.nodeValue;
-                            const index = text.toLowerCase().indexOf(searchText.toLowerCase());
+                            // Get the text node that contains our search text
+                            let node = null;
+                            let nodeIndex = 0;
+                            
+                            // Find the text node containing our target text
+                            for (let i = 0; i < element.childNodes.length; i++) {
+                                const child = element.childNodes[i];
+                                if (child.nodeType === Node.TEXT_NODE) {
+                                    const length = child.nodeValue.length;
+                                    if (nodeIndex <= index && index < nodeIndex + length) {
+                                        node = child;
+                                        break;
+                                    }
+                                    nodeIndex += length;
+                                } else {
+                                    nodeIndex += child.textContent.length;
+                                }
+                            }
+                            
+                            if (!node) return false;
+                            
+                            const parent = node.parentNode;
+                            const nodeText = node.nodeValue;
+                            const indexInNode = index - nodeIndex;
                             
                             // Split the text node and insert our highlight
-                            const before = text.substring(0, index);
-                            const highlight = text.substring(index, index + searchText.length);
-                            const after = text.substring(index + searchText.length);
+                            const before = nodeText.substring(0, indexInNode);
+                            const highlight = nodeText.substring(indexInNode, indexInNode + text.length);
+                            const after = nodeText.substring(indexInNode + text.length);
                             
                             if (before) {
                                 parent.insertBefore(document.createTextNode(before), node);
@@ -1018,9 +1150,39 @@ document.addEventListener('DOMContentLoaded', function() {
                             
                             parent.removeChild(node);
                             
-                            // Scroll to the highlighted element
+                            // Scroll to the highlighted element with smooth animation
                             window.clarifyScrollToElement(highlightSpan);
                             return true;
+                        }
+
+                        // Try to find the exact text in elements with reasonable length text
+                        const textElements = Array.from(document.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, td, div, span'))
+                            .filter(el => el.textContent.trim().length > 0)
+                            .filter(el => el.textContent.includes(text));
+                        
+                        // Sort by length to prefer more specific matches
+                        textElements.sort((a, b) => a.textContent.length - b.textContent.length);
+                        
+                        for (const element of textElements) {
+                            if (highlightTextInElement(element, text)) {
+                                return true;
+                            }
+                        }
+                        
+                        // If exact match doesn't work, try fuzzy matching
+                        if (text.length > 20) {
+                            // For longer texts, create a shortened version for fuzzy matching
+                            const shortenedText = text.substring(0, 40).trim();
+                            
+                            // Try to find elements containing the first part
+                            const fuzzyElements = Array.from(document.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, td, div, span'))
+                                .filter(el => el.textContent.includes(shortenedText));
+                            
+                            for (const element of fuzzyElements) {
+                                if (highlightTextInElement(element, shortenedText)) {
+                                    return true;
+                                }
+                            }
                         }
                         
                         return false;
@@ -1031,61 +1193,18 @@ document.addEventListener('DOMContentLoaded', function() {
                 return result && result[0] && result[0].result;
             };
             
-            // Try to find the exact text first
-            const exactResult = await findAndHighlight(searchText);
-            if (exactResult) {
+            // Try to find and highlight the text
+            const found = await findAndHighlight(searchText);
+            if (found) {
                 return true;
             }
             
-            // If exact match fails, try with case insensitive search
-            const caseInsensitiveResult = await chrome.scripting.executeScript({
-                target: { tabId: tab.id },
-                function: (text) => {
-                    return window.find(text, false, false, false, false, true, false);
-                },
-                args: [searchText]
-            });
-            
-            if (caseInsensitiveResult && caseInsensitiveResult[0] && caseInsensitiveResult[0].result) {
-                // If found, highlight it
-                await chrome.scripting.executeScript({
-                    target: { tabId: tab.id },
-                    function: () => {
-                        const selection = window.getSelection();
-                        if (selection.rangeCount > 0) {
-                            const range = selection.getRangeAt(0);
-                            const highlightSpan = document.createElement('span');
-                            highlightSpan.className = 'clarify-highlight';
-                            
-                            try {
-                                range.surroundContents(highlightSpan);
-                                window.clarifyScrollToElement(highlightSpan);
-                            } catch (e) {
-                                // If highlighting fails, at least scroll to the selection
-                                const node = selection.anchorNode;
-                                if (node) {
-                                    window.clarifyScrollToElement(node.parentElement);
-                                }
-                            }
-                        }
-                    }
-                });
-                return true;
-            }
-            
-            // If that fails too, try with partial text (split by spaces and try each phrase)
-            if (searchText.includes(' ')) {
-                const phrases = searchText.split(' ')
-                    .filter(phrase => phrase.length > 3)
-                    .map(phrase => phrase.trim())
-                    .sort((a, b) => b.length - a.length);
-                
-                for (const phrase of phrases) {
-                    const partialResult = await findAndHighlight(phrase);
-                    if (partialResult) {
-                        return true;
-                    }
-                }
+            // If not found, try with a simpler search
+            const words = searchText.split(' ').filter(w => w.length > 5);
+            if (words.length > 0) {
+                // Try with the first substantial word
+                const simpleResult = await findAndHighlight(words[0]);
+                return simpleResult;
             }
             
             return false;
@@ -1131,6 +1250,11 @@ document.addEventListener('DOMContentLoaded', function() {
 4. Keep track of the current topic of conversation. If a user asks a follow-up question about a specific topic, stay focused on that topic.
 
 5. If asked "where" something is mentioned, always try to provide the specific section, heading, or paragraph number.
+
+6. ALWAYS cite your sources by adding numbered citations in square brackets at the end of each statement like [1], [2], etc. After your answer, provide the exact source text for each citation reference in this format:
+   [1] "Exact text from the page that supports this statement"
+   [2] "Exact text from the page that supports this statement"
+   Make sure the cited text is an exact quote from the page content.
 
 Please respond in the most concise way possible unless asked to elaborate/go in depth.`;
             
