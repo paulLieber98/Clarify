@@ -911,7 +911,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
             // Try with a more reliable model
             const requestBody = {
-                model: 'gpt-3.5-turbo',
+                model: 'gpt-4o-2024-08-06',
                 messages: messages,
                 max_tokens: 800,  // Increased token limit for more complete responses
                 temperature: 0.5  // Lower temperature for more consistent responses
